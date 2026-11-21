@@ -5,241 +5,6 @@ use epicenter_common::{
 };
 use leptos::prelude::*;
 
-const PARETO_STYLES: &str = r#"
-.epi-pareto-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  color: #e2e8f0;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-.epi-panel-card {
-  background: #0f1624;
-  border: 1px solid #1e293b;
-  border-radius: 12px;
-  padding: 20px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
-}
-.epi-panel-head {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  border-bottom: 1px solid #1e293b;
-  padding-bottom: 14px;
-}
-.epi-panel-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  color: #f8fafc;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.epi-panel-sub {
-  font-size: 12.5px;
-  color: #94a3b8;
-  margin-top: 3px;
-}
-.epi-subtab-bar {
-  display: inline-flex;
-  padding: 3px;
-  border-radius: 9px;
-  background: #0b1220;
-  border: 1px solid #1e293b;
-  gap: 3px;
-  flex-shrink: 0;
-}
-.epi-subtab-btn {
-  border: none;
-  background: transparent;
-  color: #94a3b8;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 5px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 140ms ease;
-}
-.epi-subtab-btn:hover {
-  color: #e2e8f0;
-  background: rgba(255, 255, 255, 0.04);
-}
-.epi-subtab-btn.active {
-  background: rgba(56, 189, 248, 0.16);
-  color: #f8fafc;
-  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.42);
-}
-
-.epi-cand-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 12px;
-}
-.epi-cand-card {
-  background: #0b1220;
-  border: 1px solid #1e293b;
-  border-radius: 10px;
-  padding: 14px;
-  text-align: left;
-  color: #e2e8f0;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
-}
-.epi-cand-card:hover {
-  border-color: rgba(56, 189, 248, 0.55);
-  transform: translateY(-1px);
-}
-.epi-cand-card.selected {
-  border-color: #38bdf8;
-  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.45), 0 8px 24px rgba(56, 189, 248, 0.14);
-  background: #101b30;
-}
-.epi-cand-card.failed {
-  border-color: rgba(239, 68, 68, 0.32);
-  opacity: 0.88;
-}
-.epi-cand-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 6px;
-}
-.epi-cand-name {
-  font-size: 13px;
-  font-weight: 700;
-  color: #f8fafc;
-  line-height: 1.3;
-}
-.epi-cand-id {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 10.5px;
-  color: #64748b;
-}
-.epi-tag-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.epi-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: 600;
-  border: 1px solid #1e293b;
-  background: #0f1624;
-  color: #cbd5e1;
-}
-.epi-tag-cyan { color: #38bdf8; border-color: rgba(56, 189, 248, 0.38); background: rgba(56, 189, 248, 0.10); }
-.epi-tag-emerald { color: #10b981; border-color: rgba(16, 185, 129, 0.40); background: rgba(16, 185, 129, 0.12); }
-.epi-tag-amber { color: #f59e0b; border-color: rgba(245, 158, 11, 0.42); background: rgba(245, 158, 11, 0.12); }
-.epi-tag-red { color: #ef4444; border-color: rgba(239, 68, 68, 0.42); background: rgba(239, 68, 68, 0.12); }
-.epi-tag-violet { color: #a78bfa; border-color: rgba(167, 139, 250, 0.40); background: rgba(167, 139, 250, 0.12); }
-.epi-tag-gold { color: #fbbf24; border-color: rgba(251, 191, 36, 0.55); background: rgba(251, 191, 36, 0.15); }
-
-.epi-cand-metrics {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
-  padding-top: 6px;
-  border-top: 1px solid #1e293b;
-}
-.epi-mini-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.epi-mini-label {
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #64748b;
-}
-.epi-mini-val {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12.5px;
-  font-weight: 700;
-}
-
-.epi-svg-box {
-  background: #080d18;
-  border: 1px solid #1e293b;
-  border-radius: 11px;
-  padding: 10px;
-}
-.epi-svg-fluid {
-  width: 100%;
-  height: auto;
-  display: block;
-}
-.epi-scatter-hover-bar {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  font-size: 11.5px;
-  color: #94a3b8;
-  background: #0b1220;
-  border: 1px solid #1e293b;
-  border-radius: 8px;
-  padding: 7px 11px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
-.epi-arena-telemetry {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 8px;
-}
-.epi-tele-card {
-  background: #0b1220;
-  border: 1px solid #1e293b;
-  border-radius: 9px;
-  padding: 9px 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.epi-tele-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #64748b;
-}
-.epi-tele-val {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 14px;
-  font-weight: 700;
-  color: #f8fafc;
-}
-.epi-tele-sub {
-  font-size: 10.5px;
-  color: #94a3b8;
-}
-.epi-empty-box {
-  padding: 28px 16px;
-  text-align: center;
-  font-size: 12.5px;
-  color: #94a3b8;
-  background: #0b1220;
-  border: 1px dashed #1e293b;
-  border-radius: 10px;
-}
-"#;
-
 fn tier_info(tier: StrategyDepthTier) -> (&'static str, &'static str) {
     match tier {
         StrategyDepthTier::SurgicalHotfix => ("Quick Fix", "epi-tag epi-tag-amber"),
@@ -328,7 +93,6 @@ pub fn CandidateApproachesStrip(
     selected_strategy_id: RwSignal<Option<String>>,
 ) -> impl IntoView {
     view! {
-        <style>{PARETO_STYLES}</style>
         {move || {
             let Some(sess) = session.get() else {
                 return view! { <div></div> }.into_any();
@@ -343,11 +107,11 @@ pub fn CandidateApproachesStrip(
             let candidates = sess.candidates.clone();
 
             view! {
-                <section class="epi-panel-card">
+                <section class="epi-panel-card" aria-label="Candidate Approaches">
                     <div class="epi-panel-head">
                         <div>
                             <h2 class="epi-panel-title">
-                                <span class="model-dot dot-amber"></span>
+                                <span class="model-dot dot-amber" aria-hidden="true"></span>
                                 {format!("Candidate Approaches ({})", candidates.len())}
                             </h2>
                             <div class="epi-panel-sub">
@@ -400,22 +164,22 @@ pub fn CandidateApproachesStrip(
                                     };
 
                                     let risk_color = match risk {
-                                        Some(r) if r <= 25.0 => "#10b981",
-                                        Some(r) if r <= 55.0 => "#f59e0b",
-                                        Some(_) => "#ef4444",
-                                        None => "#64748b",
+                                        Some(r) if r <= 25.0 => "#6ee7b7",
+                                        Some(r) if r <= 55.0 => "#fcd34d",
+                                        Some(_) => "#fca5a5",
+                                        None => "#8b9db5",
                                     };
                                     let depth_color = match depth {
-                                        Some(d) if d >= 70.0 => "#10b981",
-                                        Some(d) if d >= 45.0 => "#38bdf8",
-                                        Some(_) => "#f59e0b",
-                                        None => "#64748b",
+                                        Some(d) if d >= 70.0 => "#6ee7b7",
+                                        Some(d) if d >= 45.0 => "#7dd3fc",
+                                        Some(_) => "#fcd34d",
+                                        None => "#8b9db5",
                                     };
                                     let speed_color = match speedup {
-                                        Some(sp) if sp > 2.0 => "#10b981",
-                                        Some(sp) if sp < -2.0 => "#ef4444",
+                                        Some(sp) if sp > 2.0 => "#6ee7b7",
+                                        Some(sp) if sp < -2.0 => "#fca5a5",
                                         Some(_) => "#e2e8f0",
-                                        None => "#64748b",
+                                        None => "#8b9db5",
                                     };
 
                                     let badges = cand.badges.clone();
@@ -424,6 +188,7 @@ pub fn CandidateApproachesStrip(
                                         <button
                                             type="button"
                                             class=card_cls
+                                            aria-pressed=is_sel.to_string()
                                             on:click=move |_| selected_strategy_id.set(Some(id_for_click.clone()))
                                         >
                                             <div class="epi-cand-top">
@@ -493,15 +258,14 @@ pub fn ParetoAndArenaPanel(
     let active_subtab = RwSignal::new(PerfSubTab::TradeOff);
 
     view! {
-        <style>{PARETO_STYLES}</style>
-        <section class="epi-panel-card">
+        <section class="epi-panel-card" aria-label="Trade-Off and Performance">
             {move || {
                 let Some(sess) = session.get() else {
                     return view! {
                         <div class="epi-panel-head">
                             <div>
                                 <h2 class="epi-panel-title">
-                                    <span class="model-dot dot-amber"></span>
+                                    <span class="model-dot dot-amber" aria-hidden="true"></span>
                                     "Trade-Off & Performance"
                                 </h2>
                                 <div class="epi-panel-sub">"Compare impact risk, fix depth, and runtime speed across approaches."</div>
@@ -533,26 +297,38 @@ pub fn ParetoAndArenaPanel(
                     PerfSubTab::TradeOff => "Lower Impact Risk (left) and higher Speedup (up) are better. Larger bubbles indicate deeper root-cause fixes.",
                     PerfSubTab::Benchmark => "Baseline vs. candidate latency measured across interleaved benchmark trials.",
                 };
+                let active_tab_id = match subtab {
+                    PerfSubTab::TradeOff => "perf-tab-tradeoff",
+                    PerfSubTab::Benchmark => "perf-tab-benchmark",
+                };
 
                 view! {
                     <div class="epi-panel-head">
                         <div>
                             <h2 class="epi-panel-title">
-                                <span class="model-dot dot-amber"></span>
+                                <span class="model-dot dot-amber" aria-hidden="true"></span>
                                 "Trade-Off & Performance"
                             </h2>
                             <div class="epi-panel-sub">{sub_desc}</div>
                         </div>
                         <div class="epi-subtab-bar" role="tablist" aria-label="Performance view">
                             <button
+                                id="perf-tab-tradeoff"
                                 type="button"
+                                role="tab"
+                                aria-selected=(subtab == PerfSubTab::TradeOff).to_string()
+                                aria-controls="perf-tabpanel"
                                 class=if subtab == PerfSubTab::TradeOff { "epi-subtab-btn active" } else { "epi-subtab-btn" }
                                 on:click=move |_| active_subtab.set(PerfSubTab::TradeOff)
                             >
                                 "Risk vs. Speed"
                             </button>
                             <button
+                                id="perf-tab-benchmark"
                                 type="button"
+                                role="tab"
+                                aria-selected=(subtab == PerfSubTab::Benchmark).to_string()
+                                aria-controls="perf-tabpanel"
                                 class=if subtab == PerfSubTab::Benchmark { "epi-subtab-btn active" } else { "epi-subtab-btn" }
                                 on:click=move |_| active_subtab.set(PerfSubTab::Benchmark)
                             >
@@ -561,22 +337,24 @@ pub fn ParetoAndArenaPanel(
                         </div>
                     </div>
 
-                    {match subtab {
-                        PerfSubTab::TradeOff => render_pareto_scatter(
-                            candidates,
-                            specs,
-                            selected_id,
-                            selected_strategy_id,
-                            hovered_scatter_id,
-                        ).into_any(),
-                        PerfSubTab::Benchmark => render_arena_panel(
-                            selected_candidate,
-                            specs,
-                            candidates,
-                            arena_summary,
-                            hovered_trial_idx,
-                        ).into_any(),
-                    }}
+                    <div id="perf-tabpanel" role="tabpanel" aria-labelledby=active_tab_id>
+                        {match subtab {
+                            PerfSubTab::TradeOff => render_pareto_scatter(
+                                candidates,
+                                specs,
+                                selected_id,
+                                selected_strategy_id,
+                                hovered_scatter_id,
+                            ).into_any(),
+                            PerfSubTab::Benchmark => render_arena_panel(
+                                selected_candidate,
+                                specs,
+                                candidates,
+                                arena_summary,
+                                hovered_trial_idx,
+                            ).into_any(),
+                        }}
+                    </div>
                 }.into_any()
             }}
         </section>
@@ -675,7 +453,13 @@ fn render_pareto_scatter(
     view! {
         <div class="epi-pareto-wrap">
             <div class="epi-svg-box">
-                <svg class="epi-svg-fluid" viewBox="0 0 640 310">
+                <svg
+                    class="epi-svg-fluid"
+                    role="group"
+                    aria-label="Risk versus Speed trade-off scatter chart"
+                    viewBox="0 0 640 310"
+                >
+                    <title>"Risk versus Speed trade-off scatter chart comparing candidate approaches"</title>
                     <defs>
                         <linearGradient id="epi-sweet-grad" x1="0%" y1="0%" x2="100%" y2="100%">
                             <stop offset="0%" stop-color="#10b981" stop-opacity="0.16" />
@@ -694,8 +478,7 @@ fn render_pareto_scatter(
                     <text
                         x=format!("{:.1}", pad_l + 8.0)
                         y=format!("{:.1}", pad_t + 14.0)
-                        fill="#10b981"
-                        fill-opacity="0.78"
+                        fill="#6ee7b7"
                         font-size="9.5"
                         font-weight="700"
                         letter-spacing="0.8"
@@ -721,7 +504,7 @@ fn render_pareto_scatter(
                                     x=format!("{:.1}", pad_l - 8.0)
                                     y=format!("{:.1}", y + 3.5)
                                     text-anchor="end"
-                                    fill="#64748b"
+                                    fill="#8b9db5"
                                     font-size="10"
                                     font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
                                 >
@@ -737,7 +520,7 @@ fn render_pareto_scatter(
                         y1=format!("{zero_y:.1}")
                         x2=format!("{:.1}", width - pad_r)
                         y2=format!("{zero_y:.1}")
-                        stroke="#475569"
+                        stroke="#64748b"
                         stroke-width="1.2"
                         stroke-dasharray="5 4"
                     />
@@ -760,7 +543,7 @@ fn render_pareto_scatter(
                                     x=format!("{x:.1}")
                                     y=format!("{:.1}", height - pad_b + 16.0)
                                     text-anchor="middle"
-                                    fill="#64748b"
+                                    fill="#8b9db5"
                                     font-size="10"
                                     font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
                                 >
@@ -771,14 +554,14 @@ fn render_pareto_scatter(
                     }).collect_view()}
 
                     // Axes borders & titles
-                    <line x1=format!("{pad_l:.1}") y1=format!("{pad_t:.1}") x2=format!("{pad_l:.1}") y2=format!("{:.1}", height - pad_b) stroke="#334155" stroke-width="1.4" />
-                    <line x1=format!("{pad_l:.1}") y1=format!("{:.1}", height - pad_b) x2=format!("{:.1}", width - pad_r) y2=format!("{:.1}", height - pad_b) stroke="#334155" stroke-width="1.4" />
+                    <line x1=format!("{pad_l:.1}") y1=format!("{pad_t:.1}") x2=format!("{pad_l:.1}") y2=format!("{:.1}", height - pad_b) stroke="#64748b" stroke-width="1.4" />
+                    <line x1=format!("{pad_l:.1}") y1=format!("{:.1}", height - pad_b) x2=format!("{:.1}", width - pad_r) y2=format!("{:.1}", height - pad_b) stroke="#64748b" stroke-width="1.4" />
 
                     <text
                         x=format!("{:.1}", pad_l + plot_w * 0.5)
                         y=format!("{:.1}", height - 8.0)
                         text-anchor="middle"
-                        fill="#94a3b8"
+                        fill="#a8b7cc"
                         font-size="10.5"
                         font-weight="600"
                     >
@@ -788,7 +571,7 @@ fn render_pareto_scatter(
                         x="15"
                         y=format!("{:.1}", pad_t + plot_h * 0.5)
                         text-anchor="middle"
-                        fill="#94a3b8"
+                        fill="#a8b7cc"
                         font-size="10.5"
                         font-weight="600"
                         transform=format!("rotate(-90 15 {:.1})", pad_t + plot_h * 0.5)
@@ -869,17 +652,56 @@ fn render_pareto_scatter(
                         };
                         let bubble_stroke_w = if is_selected { "2.6" } else { "1.8" };
 
+                        let cid_key = cid.clone();
+                        let cid_focus = cid.clone();
+                        let cid_blur = cid.clone();
+                        let cid_ring = cid.clone();
+                        let bubble_aria = format!(
+                            "{title_for_label}: Impact Risk {risk:.0} of 100, Root-Cause Depth {depth:.0} of 100, Speedup {speedup:+.1}%"
+                        );
+
                         view! {
                             <g
+                                class="epi-node-group"
+                                role="button"
+                                tabindex="0"
+                                aria-label=bubble_aria
+                                aria-pressed=is_selected.to_string()
                                 style="cursor: pointer;"
                                 on:click=move |_| selected_strategy_id.set(Some(cid_click.clone()))
+                                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                    let key = ev.key();
+                                    if key == "Enter" || key == " " {
+                                        ev.prevent_default();
+                                        selected_strategy_id.set(Some(cid_key.clone()));
+                                    }
+                                }
                                 on:mouseenter=move |_| hovered_scatter_id.set(Some(cid_enter.clone()))
                                 on:mouseleave=move |_| {
                                     if hovered_scatter_id.get_untracked().as_deref() == Some(cid_leave.as_str()) {
                                         hovered_scatter_id.set(None);
                                     }
                                 }
+                                on:focus=move |_| hovered_scatter_id.set(Some(cid_focus.clone()))
+                                on:blur=move |_| {
+                                    if hovered_scatter_id.get_untracked().as_deref() == Some(cid_blur.as_str()) {
+                                        hovered_scatter_id.set(None);
+                                    }
+                                }
                             >
+                                // Keyboard focus / active hover ring
+                                {move || (hovered_scatter_id.get().as_deref() == Some(cid_ring.as_str())).then(|| view! {
+                                    <circle
+                                        cx=format!("{cx:.1}")
+                                        cy=format!("{cy:.1}")
+                                        r=format!("{:.1}", ring_r + 6.5)
+                                        fill="none"
+                                        stroke="#7dd3fc"
+                                        stroke-width="2.5"
+                                        stroke-dasharray="4 3"
+                                    />
+                                })}
+
                                 // Selection outer halo
                                 {is_selected.then(|| view! {
                                     <circle
@@ -950,7 +772,7 @@ fn render_pareto_scatter(
             </div>
 
             // Interactive Hover / Selected Readout Strip
-            <div class="epi-scatter-hover-bar">
+            <div class="epi-scatter-hover-bar" role="status" aria-live="polite">
                 {move || {
                     let focus = hovered_scatter_id
                         .get()
@@ -975,7 +797,7 @@ fn render_pareto_scatter(
                             }.into_any()
                         }
                         None => view! {
-                            <span>"Hover or click any point to inspect its breakdown."</span>
+                            <span>"Hover, focus, or select any point to inspect its breakdown."</span>
                         }.into_any(),
                     }
                 }}
@@ -1031,9 +853,9 @@ fn render_arena_panel(
         .fold(1.0_f64, f64::max);
 
     let bar_rows = vec![
-        ("Baseline p50", baseline_p50, "#64748b"),
+        ("Baseline p50", baseline_p50, "#94a3b8"),
         ("Candidate p50", metrics.p50_ms, "#10b981"),
-        ("Baseline p95", baseline_p95, "#475569"),
+        ("Baseline p95", baseline_p95, "#64748b"),
         ("Candidate p95", metrics.p95_ms, "#38bdf8"),
     ];
 
@@ -1111,9 +933,15 @@ fn render_arena_panel(
         .filter(|c| c.arena_metrics.is_some())
         .count();
 
+    let bar_chart_aria = format!(
+        "Latency comparison for {cand_title}: Baseline median {baseline_p50:.2} ms, Candidate median {:.2} ms, Baseline p95 {baseline_p95:.2} ms, Candidate p95 {:.2} ms",
+        metrics.p50_ms, metrics.p95_ms
+    );
+    let bar_chart_title = bar_chart_aria.clone();
+
     view! {
         <div class="epi-pareto-wrap">
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:#94a3b8;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:#a8b7cc;">
                 <span>{format!("{bench_name} · {n_trials} trials · {bench_count} benchmarked")}</span>
                 <span class="epi-tag epi-tag-cyan">{short_label(&cand_title, 28)}</span>
             </div>
@@ -1151,7 +979,13 @@ fn render_arena_panel(
 
             // Horizontal Baseline vs Candidate p50 / p95 Bar Chart (<svg>)
             <div class="epi-svg-box">
-                <svg class="epi-svg-fluid" viewBox="0 0 640 132">
+                <svg
+                    class="epi-svg-fluid"
+                    role="img"
+                    aria-label=bar_chart_aria
+                    viewBox="0 0 640 132"
+                >
+                    <title>{bar_chart_title}</title>
                     {bar_rows.into_iter().enumerate().map(|(idx, (label, val, color))| {
                         let y = 14.0 + (idx as f64) * 29.0;
                         let bar_max_w = 400.0_f64;
@@ -1208,14 +1042,20 @@ fn render_arena_panel(
 
                 view! {
                     <div class="epi-svg-box">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; font-size:11px; color:#94a3b8;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; font-size:11px; color:#a8b7cc;">
                             <span style="font-weight:700; color:#e2e8f0;">"Trial-by-Trial Latency (ms)"</span>
                             <div style="display:flex; gap:12px;">
-                                <span style="color:#f59e0b;">"--- Baseline"</span>
-                                <span style="color:#10b981;">"━━ Candidate"</span>
+                                <span style="color:#fcd34d;">"--- Baseline"</span>
+                                <span style="color:#6ee7b7;">"━━ Candidate"</span>
                             </div>
                         </div>
-                        <svg class="epi-svg-fluid" viewBox="0 0 640 185">
+                        <svg
+                            class="epi-svg-fluid"
+                            role="group"
+                            aria-label=format!("Trial-by-trial latency chart across {n_trials} trials")
+                            viewBox="0 0 640 185"
+                        >
+                            <title>{format!("Trial-by-trial latency comparison across {n_trials} trials")}</title>
                             // Gridlines
                             {[s_hi, y_mid, s_lo].into_iter().map(|v| {
                                 let y = trial_y(v);
@@ -1234,7 +1074,7 @@ fn render_arena_panel(
                                             x=format!("{:.1}", sp_pl - 7.0)
                                             y=format!("{:.1}", y + 3.5)
                                             text-anchor="end"
-                                            fill="#64748b"
+                                            fill="#8b9db5"
                                             font-size="9.5"
                                             font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
                                         >
@@ -1266,17 +1106,33 @@ fn render_arena_panel(
                                 />
                             })}
 
-                            // Trial dots & hover targets
+                            // Trial dots & keyboard/hover targets
                             {(0..n_trials).map(|i| {
                                 let x = trial_x(i);
                                 let b_val = base_pts_vec.get(i).copied();
                                 let c_val = cand_pts_vec.get(i).copied();
                                 let show_tick = n_trials <= 12 || i == 0 || i + 1 == n_trials || i % 2 == 0;
+                                let trial_aria = format!(
+                                    "Trial {}: Baseline {}, Candidate {}",
+                                    i + 1,
+                                    b_val.map(|v| format!("{v:.2} ms")).unwrap_or_else(|| "not recorded".into()),
+                                    c_val.map(|v| format!("{v:.2} ms")).unwrap_or_else(|| "not recorded".into()),
+                                );
                                 view! {
                                     <g
+                                        class="epi-node-group"
+                                        role="button"
+                                        tabindex="0"
+                                        aria-label=trial_aria
                                         style="cursor: crosshair;"
                                         on:mouseenter=move |_| hovered_trial_idx.set(Some(i))
                                         on:mouseleave=move |_| {
+                                            if hovered_trial_idx.get_untracked() == Some(i) {
+                                                hovered_trial_idx.set(None);
+                                            }
+                                        }
+                                        on:focus=move |_| hovered_trial_idx.set(Some(i))
+                                        on:blur=move |_| {
                                             if hovered_trial_idx.get_untracked() == Some(i) {
                                                 hovered_trial_idx.set(None);
                                             }
@@ -1289,6 +1145,17 @@ fn render_arena_panel(
                                             height=format!("{sp_ph:.1}")
                                             fill="transparent"
                                         />
+                                        {move || (hovered_trial_idx.get() == Some(i)).then(|| view! {
+                                            <line
+                                                x1=format!("{x:.1}")
+                                                y1=format!("{sp_pt:.1}")
+                                                x2=format!("{x:.1}")
+                                                y2=format!("{:.1}", sp_pt + sp_ph)
+                                                stroke="#7dd3fc"
+                                                stroke-width="2"
+                                                stroke-dasharray="3 3"
+                                            />
+                                        })}
                                         {b_val.map(|v| view! {
                                             <circle cx=format!("{x:.1}") cy=format!("{:.1}", trial_y(v)) r="3.5" fill="#f59e0b" stroke="#080d18" stroke-width="1" />
                                         })}
@@ -1300,7 +1167,7 @@ fn render_arena_panel(
                                                 x=format!("{x:.1}")
                                                 y=format!("{:.1}", sp_h - 10.0)
                                                 text-anchor="middle"
-                                                fill="#64748b"
+                                                fill="#8b9db5"
                                                 font-size="9.5"
                                                 font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
                                             >
@@ -1313,7 +1180,7 @@ fn render_arena_panel(
                         </svg>
                     </div>
 
-                    <div class="epi-scatter-hover-bar">
+                    <div class="epi-scatter-hover-bar" role="status" aria-live="polite">
                         {move || match hovered_trial_idx.get() {
                             Some(idx) => {
                                 let b = base_samples_for_readout.get(idx).copied();
@@ -1339,7 +1206,7 @@ fn render_arena_panel(
                                     .as_ref()
                                     .map(|s| s.summary_notes.clone())
                                     .filter(|s| !s.is_empty())
-                                    .unwrap_or_else(|| "Hover any trial point to compare paired baseline and candidate timings.".into());
+                                    .unwrap_or_else(|| "Hover or focus any trial point to compare paired baseline and candidate timings.".into());
                                 view! { <span>{notes}</span> }.into_any()
                             }
                         }}

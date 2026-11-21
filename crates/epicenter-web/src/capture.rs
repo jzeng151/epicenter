@@ -445,11 +445,11 @@ pub fn MultimodalIntakeDeck(
     };
 
     view! {
-        <section class="panel">
+        <section id="intake-panel" class="panel" aria-labelledby="intake-heading">
             <div class="panel-header">
                 <div>
-                    <h2 class="panel-title">
-                        <span class="model-dot dot-cyan"></span>
+                    <h2 id="intake-heading" class="panel-title">
+                        <span class="model-dot dot-cyan" aria-hidden="true"></span>
                         "Multimodal Intake"
                     </h2>
                     <div class="panel-subtitle">
@@ -458,35 +458,35 @@ pub fn MultimodalIntakeDeck(
                 </div>
             </div>
 
-            <form class="panel-body" on:submit=on_submit>
+            <form class="panel-body" on:submit=on_submit novalidate=true>
                 // Clean jargon-free overview of the comparison pipeline
                 <div class="pipeline-flow-strip" aria-label="Comparison workflow">
                     <span class="pipeline-flow-step active">
-                        <span class="model-dot dot-cyan"></span>
+                        <span class="model-dot dot-cyan" aria-hidden="true"></span>
                         <strong>"1. Intake"</strong>
                         "Extract clues from media & notes"
                     </span>
-                    <span class="pipeline-flow-arrow">"→"</span>
+                    <span class="pipeline-flow-arrow" aria-hidden="true">"→"</span>
                     <span class="pipeline-flow-step">
-                        <span class="model-dot dot-red"></span>
+                        <span class="model-dot dot-red" aria-hidden="true"></span>
                         <strong>"2. Repro Test"</strong>
                         "Verify a failing test before editing"
                     </span>
-                    <span class="pipeline-flow-arrow">"→"</span>
+                    <span class="pipeline-flow-arrow" aria-hidden="true">"→"</span>
                     <span class="pipeline-flow-step">
-                        <span class="model-dot dot-emerald"></span>
+                        <span class="model-dot dot-emerald" aria-hidden="true"></span>
                         <strong>"3. Implement"</strong>
                         "Build multiple fixes in isolation"
                     </span>
-                    <span class="pipeline-flow-arrow">"→"</span>
+                    <span class="pipeline-flow-arrow" aria-hidden="true">"→"</span>
                     <span class="pipeline-flow-step">
-                        <span class="model-dot dot-violet"></span>
+                        <span class="model-dot dot-violet" aria-hidden="true"></span>
                         <strong>"4. Benchmark & Audit"</strong>
                         "Measure speed & code impact"
                     </span>
-                    <span class="pipeline-flow-arrow">"→"</span>
+                    <span class="pipeline-flow-arrow" aria-hidden="true">"→"</span>
                     <span class="pipeline-flow-step">
-                        <span class="model-dot dot-amber"></span>
+                        <span class="model-dot dot-amber" aria-hidden="true"></span>
                         <strong>"5. Summary"</strong>
                         "Audio briefing, diff & export"
                     </span>
@@ -499,7 +499,7 @@ pub fn MultimodalIntakeDeck(
                             <span class="field-label" style="margin:0;color:#7dd3fc;">
                                 "1. Capture or Upload Visual / Video / Audio Evidence"
                             </span>
-                            <span class="badge badge-cyan">
+                            <span class="badge badge-cyan" role="status" aria-live="polite">
                                 {move || format!("{} attached", attachments.get().len())}
                             </span>
                         </div>
@@ -519,8 +519,11 @@ pub fn MultimodalIntakeDeck(
 
                             <input
                                 node_ref=file_input_ref
+                                id="intake-media-upload"
                                 type="file"
                                 multiple=true
+                                tabindex="-1"
+                                aria-label="Upload screenshots, screen recordings, voice notes, or PDFs"
                                 accept=".mp4,.webm,.gif,.png,.jpg,.jpeg,.pdf,.wav,.mp3,video/*,image/*,audio/*,application/pdf"
                                 style="display:none;"
                                 on:change=on_file_input_change
@@ -546,7 +549,7 @@ pub fn MultimodalIntakeDeck(
                                             class="btn btn-danger btn-sm"
                                             on:click=stop_capture
                                         >
-                                            <span class="rec-dot"></span>
+                                            <span class="rec-dot" aria-hidden="true"></span>
                                             {format!("Stop {} & Upload", match mode {
                                                 RecordingMode::Screen => "Screen",
                                                 RecordingMode::Voice => "Voice",
@@ -575,14 +578,14 @@ pub fn MultimodalIntakeDeck(
                             </div>
 
                             {move || recording_mode.get().map(|mode| view! {
-                                <div style="margin-top:10px;display:inline-flex;align-items:center;gap:7px;font-size:12px;color:#fca5a5;">
-                                    <span class="rec-dot"></span>
+                                <div role="status" aria-live="polite" style="margin-top:10px;display:inline-flex;align-items:center;gap:7px;font-size:12px;color:#fca5a5;">
+                                    <span class="rec-dot" aria-hidden="true"></span>
                                     <span>{mode.label()}</span>
                                 </div>
                             })}
 
                             {move || (uploading_count.get() > 0).then(|| view! {
-                                <div style="margin-top:8px;font-size:11px;color:#7dd3fc;font-family:var(--font-mono);">
+                                <div role="status" aria-live="polite" style="margin-top:8px;font-size:11px;color:#7dd3fc;font-family:var(--font-mono);">
                                     {move || format!("Uploading {} file(s)...", uploading_count.get())}
                                 </div>
                             })}
@@ -606,13 +609,19 @@ pub fn MultimodalIntakeDeck(
                                             let kind_str = media_kind_label(att.media_kind);
                                             let filename = att.filename.clone();
                                             let filename_title = filename.clone();
+                                            let remove_aria = format!("Remove attachment {}", filename);
                                             let mime = att.mime_type.clone();
                                             let url = api_client::attachment_content_url(att_id);
                                             let open_url = url.clone();
 
                                             let preview_body = match att.media_kind {
                                                 MediaKind::Screenshot => view! {
-                                                    <a href=open_url target="_blank" rel="noopener noreferrer" title="Open full screenshot">
+                                                    <a
+                                                        href=open_url
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        aria-label=format!("Open full screenshot {} (opens in a new tab)", filename)
+                                                    >
                                                         <img
                                                             class="intake-preview-img"
                                                             src=url
@@ -628,6 +637,7 @@ pub fn MultimodalIntakeDeck(
                                                         muted=true
                                                         preload="metadata"
                                                         src=url
+                                                        aria-label=format!("Screen recording preview: {}", filename)
                                                     ></video>
                                                 }.into_any(),
                                                 MediaKind::VoiceNote => view! {
@@ -636,6 +646,7 @@ pub fn MultimodalIntakeDeck(
                                                         controls=true
                                                         preload="metadata"
                                                         src=url
+                                                        aria-label=format!("Voice note preview: {}", filename)
                                                     ></audio>
                                                 }.into_any(),
                                                 MediaKind::Pdf | MediaKind::Log | MediaKind::Other => view! {
@@ -649,6 +660,7 @@ pub fn MultimodalIntakeDeck(
                                                             style="font-size:11.5px;"
                                                         >
                                                             "Open File ↗"
+                                                            <span class="sr-only">" (opens in a new tab)"</span>
                                                         </a>
                                                     </div>
                                                 }.into_any(),
@@ -662,16 +674,17 @@ pub fn MultimodalIntakeDeck(
                                                             <span class="mono intake-preview-name" title=filename_title>{filename}</span>
                                                         </div>
                                                         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-                                                            <span style="color:var(--text-dim);font-size:10.5px;" class="mono">{size_text}</span>
+                                                            <span style="color:var(--text-dim);font-size:11px;" class="mono">{size_text}</span>
                                                             <button
                                                                 type="button"
                                                                 class="attachment-remove"
+                                                                aria-label=remove_aria
                                                                 title="Remove attachment"
                                                                 on:click=move |_| {
                                                                     attachments.update(|list| list.retain(|x| x.id != att_id));
                                                                 }
                                                             >
-                                                                "×"
+                                                                <span aria-hidden="true">"×"</span>
                                                             </button>
                                                         </div>
                                                     </div>
@@ -693,18 +706,22 @@ pub fn MultimodalIntakeDeck(
 
                         <div class="form-row-3">
                             <div>
-                                <label class="field-label">"GitHub Repository URL"</label>
+                                <label class="field-label" for="intake-repo-url">"GitHub Repository URL"</label>
                                 <input
+                                    id="intake-repo-url"
                                     type="url"
                                     class="input mono"
                                     placeholder="https://github.com/owner/repo"
+                                    aria-required="true"
+                                    aria-invalid=move || (error_msg.get().is_some() && repo_url.get().trim().is_empty()).then_some("true")
                                     prop:value=move || repo_url.get()
                                     on:input=move |ev| repo_url.set(event_target_value(&ev))
                                 />
                             </div>
                             <div>
-                                <label class="field-label">"Commit SHA (Optional)"</label>
+                                <label class="field-label" for="intake-commit-sha">"Commit SHA (Optional)"</label>
                                 <input
+                                    id="intake-commit-sha"
                                     type="text"
                                     class="input mono"
                                     placeholder="HEAD"
@@ -713,8 +730,9 @@ pub fn MultimodalIntakeDeck(
                                 />
                             </div>
                             <div>
-                                <label class="field-label">"Branch / Ref (Optional)"</label>
+                                <label class="field-label" for="intake-git-ref">"Branch / Ref (Optional)"</label>
                                 <input
+                                    id="intake-git-ref"
                                     type="text"
                                     class="input mono"
                                     placeholder="main"
@@ -726,11 +744,12 @@ pub fn MultimodalIntakeDeck(
 
                         <div class="form-row-2">
                             <div>
-                                <label class="field-label">"Task Type"</label>
-                                <div class="task-kind-toggle">
+                                <span id="intake-task-type-label" class="field-label">"Task Type"</span>
+                                <div class="task-kind-toggle" role="group" aria-labelledby="intake-task-type-label">
                                     <button
                                         type="button"
                                         class=move || if task_kind.get() == TaskKind::Bug { "kind-btn active" } else { "kind-btn" }
+                                        aria-pressed=move || (task_kind.get() == TaskKind::Bug).to_string()
                                         on:click=move |_| task_kind.set(TaskKind::Bug)
                                     >
                                         "Bug Fix"
@@ -738,6 +757,7 @@ pub fn MultimodalIntakeDeck(
                                     <button
                                         type="button"
                                         class=move || if task_kind.get() == TaskKind::Feature { "kind-btn active" } else { "kind-btn" }
+                                        aria-pressed=move || (task_kind.get() == TaskKind::Feature).to_string()
                                         on:click=move |_| task_kind.set(TaskKind::Feature)
                                     >
                                         "Feature / Optimization"
@@ -745,8 +765,9 @@ pub fn MultimodalIntakeDeck(
                                 </div>
                             </div>
                             <div>
-                                <label class="field-label">"Session Title (Optional)"</label>
+                                <label class="field-label" for="intake-session-title">"Session Title (Optional)"</label>
                                 <input
+                                    id="intake-session-title"
                                     type="text"
                                     class="input"
                                     placeholder="Short headline for this comparison"
@@ -757,10 +778,13 @@ pub fn MultimodalIntakeDeck(
                         </div>
 
                         <div>
-                            <label class="field-label">"Problem Statement / Notes"</label>
+                            <label class="field-label" for="intake-problem-statement">"Problem Statement / Notes"</label>
                             <textarea
+                                id="intake-problem-statement"
                                 class="textarea"
                                 placeholder="Describe the bug, expected vs. actual behavior, performance target, or paste error logs..."
+                                aria-required="true"
+                                aria-invalid=move || (error_msg.get().is_some() && problem_statement.get().trim().is_empty()).then_some("true")
                                 prop:value=move || problem_statement.get()
                                 on:input=move |ev| problem_statement.set(event_target_value(&ev))
                             ></textarea>
@@ -768,10 +792,10 @@ pub fn MultimodalIntakeDeck(
 
                         // Error / status feedback
                         {move || error_msg.get().map(|msg| view! {
-                            <div class="alert-banner err">{msg}</div>
+                            <div class="alert-banner err" role="alert">{msg}</div>
                         })}
                         {move || status_note.get().map(|msg| view! {
-                            <div class="alert-banner ok">{msg}</div>
+                            <div class="alert-banner ok" role="status" aria-live="polite">{msg}</div>
                         })}
 
                         <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:auto;padding-top:4px;">

@@ -299,11 +299,11 @@ pub fn BriefingAndHandoffDeck(
     };
 
     view! {
-        <section class="panel">
+        <section class="panel" aria-labelledby="briefing-heading">
             <div class="panel-header">
                 <div>
-                    <h2 class="panel-title">
-                        <span class="model-dot dot-emerald"></span>
+                    <h2 id="briefing-heading" class="panel-title">
+                        <span class="model-dot dot-emerald" aria-hidden="true"></span>
                         "Summary, Diff & Export"
                     </h2>
                     <div class="panel-subtitle">
@@ -434,7 +434,7 @@ pub fn BriefingAndHandoffDeck(
                                             <span class="field-label" style="color:#fca5a5;">
                                                 "Captured Error Details"
                                             </span>
-                                            <pre class="terminal-box" style="border-color:rgba(239,68,68,0.45);">{excerpt}</pre>
+                                            <pre class="terminal-box" tabindex="0" style="border-color:rgba(239,68,68,0.45);">{excerpt}</pre>
                                         </div>
                                     })}
                                 </div>
@@ -450,7 +450,7 @@ pub fn BriefingAndHandoffDeck(
                                         </div>
                                         {match audio_url {
                                             Some(url) => view! {
-                                                <audio controls=true preload="metadata" src=url></audio>
+                                                <audio controls=true preload="metadata" aria-label="2-speaker audio walkthrough" src=url></audio>
                                             }.into_any(),
                                             None => view! {
                                                 <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">
@@ -483,7 +483,7 @@ pub fn BriefingAndHandoffDeck(
                                         }.into_any()
                                     } else {
                                         view! {
-                                            <div class="dialogue-feed">
+                                            <div class="dialogue-feed" tabindex="0" role="region" aria-label="Audio walkthrough transcript">
                                                 {script.into_iter().map(|turn| {
                                                     let is_arch = turn.speaker == DialogueSpeaker::Architect;
                                                     let cls = if is_arch {
@@ -524,11 +524,11 @@ pub fn BriefingAndHandoffDeck(
                                                             {bug.repro_test_path}
                                                         </span>
                                                     </div>
-                                                    <div class="mono" style="font-size:11.5px;color:#94a3b8;">
+                                                    <div class="mono" style="font-size:11.5px;color:var(--text-muted);">
                                                         {format!("$ {}", bug.test_command)}
                                                     </div>
                                                     {(!bug.failure_excerpt.trim().is_empty()).then(|| view! {
-                                                        <pre class="terminal-box" style="max-height:84px;">{bug.failure_excerpt}</pre>
+                                                        <pre class="terminal-box" tabindex="0" style="max-height:84px;">{bug.failure_excerpt}</pre>
                                                     })}
                                                 </div>
                                             }.into_any()
@@ -537,7 +537,7 @@ pub fn BriefingAndHandoffDeck(
                                             <div class="redgate-card">
                                                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                                     <span class="badge badge-cyan">"Feature Acceptance Test"</span>
-                                                    <span class="mono" style="font-size:11.5px;color:#94a3b8;">
+                                                    <span class="mono" style="font-size:11.5px;color:var(--text-muted);">
                                                         {format!("$ {}", feat.test_command)}
                                                     </span>
                                                 </div>
@@ -552,7 +552,7 @@ pub fn BriefingAndHandoffDeck(
                                         let active_id_cmp = current_strategy_key.clone();
                                         let specs_for_btns = strategy_specs.clone();
                                         view! {
-                                            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+                                            <div role="group" aria-label="Select candidate approach" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
                                                 {candidates_list.into_iter().map(|c| {
                                                     let cid = c.strategy_id.clone();
                                                     let cid_click = cid.clone();
@@ -572,10 +572,12 @@ pub fn BriefingAndHandoffDeck(
                                                         <button
                                                             type="button"
                                                             class=btn_cls
+                                                            aria-pressed=is_sel.to_string()
                                                             on:click=move |_| selected_strategy_id.set(Some(cid_click.clone()))
                                                         >
-                                                            <span class=if green { "model-dot dot-emerald" } else { "model-dot dot-amber" }></span>
+                                                            <span class=if green { "model-dot dot-emerald" } else { "model-dot dot-amber" } aria-hidden="true"></span>
                                                             <span>{label}</span>
+                                                            <span class="sr-only">{if green { " (Passed)" } else { " (Failed)" }}</span>
                                                         </button>
                                                     }
                                                 }).collect_view()}
@@ -695,7 +697,7 @@ pub fn BriefingAndHandoffDeck(
                                                             (sid == cand_id_pr_match).then_some(pr)
                                                         });
                                                         matching_pr.map(|pr| view! {
-                                                            <div class="alert-banner ok" style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                                                            <div class="alert-banner ok" role="status" aria-live="polite" style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
                                                                 <span>
                                                                     {format!("PR #{} created on branch ", pr.number)}
                                                                     <code class="mono">{pr.branch_name}</code>
@@ -708,16 +710,17 @@ pub fn BriefingAndHandoffDeck(
                                                                     style="text-decoration:none;"
                                                                 >
                                                                     "View PR on GitHub ->"
+                                                                    <span class="sr-only">" (opens in a new tab)"</span>
                                                                 </a>
                                                             </div>
                                                         })
                                                     }}
 
                                                     {move || action_error.get().map(|err| view! {
-                                                        <div class="alert-banner err" style="margin-bottom:10px;">{err}</div>
+                                                        <div class="alert-banner err" role="alert" style="margin-bottom:10px;">{err}</div>
                                                     })}
                                                     {move || action_notice.get().map(|msg| view! {
-                                                        <div class="alert-banner ok" style="margin-bottom:10px;">{msg}</div>
+                                                        <div class="alert-banner ok" role="status" aria-live="polite" style="margin-bottom:10px;">{msg}</div>
                                                     })}
 
                                                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
@@ -738,7 +741,7 @@ pub fn BriefingAndHandoffDeck(
                                                         }.into_any()
                                                     } else {
                                                         view! {
-                                                            <div class="diff-container">
+                                                            <div class="diff-container" tabindex="0" role="region" aria-label="Code diff viewer">
                                                                 {diff_lines.into_iter().enumerate().map(|(idx, line)| {
                                                                     let cls = if line.starts_with("diff --git")
                                                                         || line.starts_with("index ")
@@ -769,7 +772,7 @@ pub fn BriefingAndHandoffDeck(
                                                     {(!cand.test_output_tail.trim().is_empty()).then(|| view! {
                                                         <div style="margin-top:12px;">
                                                             <span class="field-label">"Test Output"</span>
-                                                            <pre class="terminal-box">{cand.test_output_tail}</pre>
+                                                            <pre class="terminal-box" tabindex="0">{cand.test_output_tail}</pre>
                                                         </div>
                                                     })}
                                                 </div>

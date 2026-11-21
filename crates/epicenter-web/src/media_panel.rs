@@ -53,7 +53,12 @@ fn render_attachment_card(
     let media_body = match att.media_kind {
         MediaKind::Screenshot => view! {
             <div class="evidence-media-wrap">
-                <a href=open_url.clone() target="_blank" rel="noopener noreferrer" title="Open full-resolution image">
+                <a
+                    href=open_url.clone()
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label=format!("Open full-resolution screenshot {} (opens in a new tab)", filename)
+                >
                     <img
                         class="evidence-img"
                         src=content_url
@@ -71,6 +76,7 @@ fn render_attachment_card(
                     controls=true
                     preload="metadata"
                     src=content_url
+                    aria-label=format!("Screen recording: {}", filename)
                 ></video>
 
                 <div class="keyframe-section">
@@ -142,6 +148,7 @@ fn render_attachment_card(
                     controls=true
                     preload="metadata"
                     src=content_url
+                    aria-label=format!("Voice note: {}", filename)
                 ></audio>
             </div>
         }
@@ -164,6 +171,7 @@ fn render_attachment_card(
                     style="text-decoration:none;"
                 >
                     "Open File ↗"
+                    <span class="sr-only">" (opens in a new tab)"</span>
                 </a>
             </div>
         }
@@ -175,7 +183,7 @@ fn render_attachment_card(
             <div class="evidence-card-head">
                 <div style="display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap;">
                     <span class=kind_cls>{kind_label}</span>
-                    <span class="mono evidence-filename" title=filename_title>{filename}</span>
+                    <span class="mono evidence-filename" title=filename_title>{filename.clone()}</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
                     <span class="mono" style="font-size:11px;color:var(--text-dim);">{size_text}</span>
@@ -185,7 +193,7 @@ fn render_attachment_card(
                         rel="noopener noreferrer"
                         class="mono"
                         style="font-size:11px;"
-                        title="Open file in new tab"
+                        aria-label=format!("Open {} in a new tab", filename)
                     >
                         "Open ↗"
                     </a>
