@@ -42,7 +42,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         check_github: bool,
     },
-    /// Harvest real merged bug-fix PRs from external Python & TypeScript OSS repositories (or a single PR URL).
+    /// Harvest real merged bug-fix PRs from first-party (`jzeng151`-owned) Python & TypeScript repositories (or a single PR URL).
     Harvest {
         /// Destination JSON path for harvested EvalIssueCase records.
         #[arg(long, default_value = "eval_runs/harvested.json")]
@@ -50,11 +50,11 @@ enum Commands {
         /// Optional single merged GitHub PR URL to harvest as an EvalSplit::LiveJudge case.
         #[arg(long)]
         pr: Option<String>,
-        /// Comma-separated owner/repo list (defaults to 12 Python & TypeScript OSS repos).
+        /// Comma-separated owner/repo list (defaults to jzeng151/hermes-lyre, jzeng151/soilsense, jzeng151/pop-engine).
         #[arg(long)]
         repos: Option<String>,
         /// Maximum cases harvested per repository.
-        #[arg(long, default_value_t = 3)]
+        #[arg(long, default_value_t = 10)]
         max_per_repo: usize,
         /// Maximum total cases to harvest across all repositories.
         #[arg(long, default_value_t = 20)]
