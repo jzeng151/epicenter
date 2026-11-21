@@ -280,6 +280,54 @@ const EVAL_STYLES: &str = r#"
   color: #fca5a5;
   font-size: 12px;
 }
+.epi-sim-warning {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.22), rgba(245, 158, 11, 0.22));
+  border: 1.5px solid #f59e0b;
+  border-left: 5px solid #ef4444;
+  border-radius: 10px;
+  padding: 12px 14px;
+  color: #fef3c7;
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.45;
+  letter-spacing: 0.01em;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.18);
+}
+.epi-live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(16, 185, 129, 0.55);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.18);
+}
+.epi-sha-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #cbd5e1;
+  background: #080d18;
+  border: 1px solid #334155;
+  text-decoration: none;
+}
+.epi-sha-badge:hover {
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
 .epi-empty-state {
   padding: 32px 16px;
   text-align: center;
@@ -290,6 +338,14 @@ const EVAL_STYLES: &str = r#"
   border-radius: 10px;
 }
 "#;
+
+fn is_simulated_label(label: &str) -> bool {
+    let lower = label.to_ascii_lowercase();
+    lower.contains("dry-run")
+        || lower.contains("offline")
+        || lower.contains("seed")
+        || lower.contains("simulated")
+}
 
 fn arm_color(arm: EvalArm) -> &'static str {
     match arm {
@@ -368,7 +424,7 @@ fn load_latest_eval(
     error_msg.set(None);
     spawn_local(async move {
         let result = async {
-            let resp = Request::get("/api/eval/latest")
+            let resp = Request::get(&crate::api_client::api_url("/api/eval/latest"))
                 .send()
                 .await
                 .map_err(|e| format!("Network error fetching /api/eval/latest: {e}"))?;
@@ -433,7 +489,7 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                 let payload = LiveJudgePrRequest { pr_url: url };
                 let body = serde_json::to_string(&payload)
                     .map_err(|e| format!("Failed serializing request: {e}"))?;
-                let req = Request::post("/api/eval/judge-pr")
+                let req = Request::post(&crate::api_client::api_url("/api/eval/judge-pr"))
                     .header("Content-Type", "application/json")
                     .body(body)
                     .map_err(|e| format!("Failed building request: {e}"))?;
@@ -578,10 +634,12 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                     let Some(ev) = eval_data.get() else {
                         return view! {
                             <div class="epi-empty-state">
-                                "No 5-Sigma evaluation artifact found on server yet. Run `epicenter-eval run` or paste any merged GitHub PR URL above to run a live 3-way blind test!"
+                                "No live host-verified 5-Sigma evaluation runs found yet. Epicenter only surfaces genuine live runs (fabricated dry-run seeds are omitted). Run `epicenter-eval run` against the live Gemini 4 API + Host Verifier, or paste any merged GitHub PR URL above to run a live 3-way blind test."
                             </div>
                         }.into_any();
                     };
+
+                    let simulated = is_simulated_label(&ev.label);
 
                     let total_cnt = ev.cases.len();
                     let unseen_cnt = ev.cases.iter().filter(|c| c.split == EvalSplit::LockedUnseen).count();
@@ -597,6 +655,30 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                     let media_cls = if filter == EvalFilter::MultimodalOnly { "epi-filter-pill active" } else { "epi-filter-pill" };
 
                     view! {
+                        // Data Provenance Verification Banner / Live Host-Verified Pill
+                        {if simulated {
+                            view! {
+                                <div class="epi-sim-warning" role="alert">
+                                    <span>"⚠"</span>
+                                    <span>
+                                        "SIMULATED / DRY-RUN DATA — NOT REAL MODEL EVALUATION RESULTS. Run epicenter-eval run against live Gemini 4 API + Host Verifier for real scores."
+                                    </span>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+                                    <span class="epi-live-pill">
+                                        <span class="model-dot dot-emerald"></span>
+                                        "LIVE HOST-VERIFIED 5-SIGMA RUN"
+                                    </span>
+                                    <span style="font-size:11.5px;color:#94a3b8;">
+                                        "Scored against withheld maintainer ground-truth tests on real pinned commits."
+                                    </span>
+                                </div>
+                            }.into_any()
+                        }}
+
                         // Split Filter Pills
                         <div class="epi-filter-bar">
                             <button type="button" class=all_cls on:click=move |_| active_filter.set(EvalFilter::All)>
@@ -1031,11 +1113,34 @@ fn render_case_table(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl I
         .map(|case| {
             let (sp_lbl, sp_cls) = split_badge(case.split);
             let repo_short = repo_short_name(&case.repo_url);
-            let issue_href = if let Some(pr) = case.pr_number {
-                format!("{}/pull/{pr}", case.repo_url.trim_end_matches('/'))
-            } else {
-                format!("{}/issues/{}", case.repo_url.trim_end_matches('/'), case.issue_number)
+            let repo_base = case.repo_url.trim_end_matches('/').trim_end_matches(".git");
+
+            let pr_link = case.pr_number.map(|pr| {
+                let href = format!("{repo_base}/pull/{pr}");
+                let label = format!("{repo_short} PR #{pr}");
+                (href, label, pr)
+            });
+            let show_separate_issue = match case.pr_number {
+                Some(pr) => case.issue_number != 0 && case.issue_number != pr,
+                None => true,
             };
+            let issue_link = show_separate_issue.then(|| {
+                let href = format!("{repo_base}/issues/{}", case.issue_number);
+                let label = if case.pr_number.is_some() {
+                    format!("Issue #{}", case.issue_number)
+                } else {
+                    format!("{repo_short} Issue #{}", case.issue_number)
+                };
+                (href, label)
+            });
+
+            let commit_badge = (!case.parent_commit.trim().is_empty()).then(|| {
+                let full_sha = case.parent_commit.trim().to_string();
+                let short_len = 7.min(full_sha.len());
+                let short_sha = full_sha[..short_len].to_string();
+                let href = format!("{repo_base}/commit/{full_sha}");
+                (href, short_sha, full_sha)
+            });
 
             let o1 = outcomes
                 .iter()
@@ -1055,17 +1160,40 @@ fn render_case_table(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl I
 
             view! {
                 <tr>
-                    <td style="min-width:210px;">
+                    <td style="min-width:230px;">
                         <div style="font-weight:700; color:#f8fafc;">{title}</div>
-                        <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:4px;">
-                            <a
-                                href=issue_href
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style="color:#38bdf8; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; text-decoration:none;"
-                            >
-                                {format!("{repo_short}#{}", case.issue_number)}
-                            </a>
+                        <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:5px;">
+                            {pr_link.map(|(href, label, _pr)| view! {
+                                <a
+                                    href=href
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style="color:#38bdf8; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; text-decoration:none; font-weight:600;"
+                                >
+                                    {label}
+                                </a>
+                            })}
+                            {issue_link.map(|(href, label)| view! {
+                                <a
+                                    href=href
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style="color:#7dd3fc; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; text-decoration:none;"
+                                >
+                                    {label}
+                                </a>
+                            })}
+                            {commit_badge.map(|(href, short_sha, full_sha)| view! {
+                                <a
+                                    href=href
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    class="epi-sha-badge"
+                                    title=format!("Pinned parent commit {full_sha}")
+                                >
+                                    {format!("@{short_sha}")}
+                                </a>
+                            })}
                             <span class=sp_cls>{sp_lbl}</span>
                             {case.has_multimodal_media.then(|| view! {
                                 <span class="epi-badge epi-badge-violet">"Multimodal"</span>
@@ -1096,4 +1224,19 @@ fn render_case_table(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl I
         </div>
     }
     .into_any()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_simulated_label;
+
+    #[test]
+    fn detects_simulated_labels_case_insensitively() {
+        assert!(is_simulated_label("5-sigma-dry-run"));
+        assert!(is_simulated_label("OFFLINE_EVAL_V1"));
+        assert!(is_simulated_label("Seeded Benchmark"));
+        assert!(is_simulated_label("Simulated Run"));
+        assert!(!is_simulated_label("live-gemini4-host-verified-v1"));
+        assert!(!is_simulated_label("pallets/click#3884 live judge"));
+    }
 }
