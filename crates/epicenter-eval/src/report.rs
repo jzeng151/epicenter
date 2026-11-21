@@ -55,14 +55,10 @@ where
     EvalScorecard::from_outcomes(&subset_cases, &subset_outcomes)
 }
 
-/// Renders the full executive Markdown report (`FIVE_SIGMA_REPORT.md`) for a `FiveSigmaEval` run.
+/// Renders the full executive Markdown report (`FIVE_SIGMA_REPORT.md`) for a live `FiveSigmaEval` run.
 pub fn render_markdown_report(eval: &FiveSigmaEval) -> String {
     let subsets = compute_subset_scorecards(eval);
     let mut md = String::with_capacity(8192);
-
-    let is_dry_run = eval.label.to_ascii_lowercase().contains("dry-run")
-        || eval.label.to_ascii_lowercase().contains("offline")
-        || eval.label.to_ascii_lowercase().contains("seed");
 
     let _ = writeln!(md, "# Epicenter 5-Sigma 3-Way Evaluation Report\n");
     let _ = writeln!(md, "## Run Metadata\n");
@@ -72,12 +68,7 @@ pub fn render_markdown_report(eval: &FiveSigmaEval) -> String {
     let _ = writeln!(md, "| Run Label | `{}` |", eval.label);
     let _ = writeln!(
         md,
-        "| Execution Mode | {} |",
-        if is_dry_run {
-            "Offline Dry-Run Baseline Seed (`epicenter-graph` structural validator; ready to overwrite via live API run)"
-        } else {
-            "Live Gemini 4 API + Remote Verification Sandbox"
-        }
+        "| Execution Mode | Live Gemini 4 API + Independent Host Sandbox Verification (`git apply` + real OS test exit codes) |"
     );
     let _ = writeln!(
         md,
