@@ -7,6 +7,7 @@ pub mod intake;
 pub mod planner;
 pub mod red_gate;
 pub mod repo;
+pub mod verifier;
 pub mod workers;
 
 use chrono::Utc;
@@ -110,14 +111,14 @@ impl TournamentEngine {
 
     /// Executes Stages 1..=7 of the Epicenter tournament, streaming `LiveEvent`s to `event_tx`.
     ///
-    /// - When `self.gemini` is `Some(client)`, executes the full live 7-stage Gemini 4 pipeline:
-    ///   1. `Hydrogen` multimodal intake (resumable Files API upload + repo tree).
-    ///   2. Locked Red-Gate (2× `Neon` Managed Agent -> 1× `Carbon` escalation -> graceful fallback).
-    ///   3. `Carbon` dynamic-K (`1..=5`) orthogonal strategy planner + benchmark harness spec.
-    ///   4. Parallel `Neon` sandboxes (4 internal edit-test loops, locked-repro strip) + `0/K` rescue.
-    ///   5. Single-VM Interleaved Benchmark Arena + per-candidate coverage capture.
-    ///   6. 3-Layer Blast-Radius (`RepoCallGraph` + `CoverageMap` + `Carbon` Dual-Score hazards/depth).
-    ///   7. 2-Speaker War-Room Executive Briefing + optional `gemini-3.8-flash-tts` WAV synthesis.
+    /// - When `self.gemini` is `Some(client)`, executes the fast host-verified 7-stage Gemini 4 pipeline:
+    ///   1. Local cached git mirror checkout + concurrent runtime env prep & `Hydrogen` multimodal intake.
+    ///   2. Independent Host-Verified Locked Red-Gate (2× `Neon` -> 1× `Carbon` escalation, honest fail-fast).
+    ///   3. `Carbon` dynamic-K (`1..=5`, default 3) orthogonal strategy planner + fast micro-benchmark spec.
+    ///   4. Parallel host-verified `Neon` edit-test workers (up to 3 loops, 90s deadline) + `0/K` Carbon rescue.
+    ///   5. Single-Host Interleaved Benchmark Arena (`std::time::Instant`) + real coverage capture.
+    ///   6. 3-Layer Blast-Radius (`RepoCallGraph` + `CoverageMap` + concurrent `Carbon` Dual-Score hazards/depth).
+    ///   7. 2-Speaker War-Room Executive Briefing (`Hydrogen` -> `Carbon` fallback) + optional TTS WAV.
     /// - When `self.gemini` is `None`, runs the deterministic offline simulation (`demo::run_offline_demo_tournament`).
     pub async fn execute_session(
         &self,
@@ -130,99 +131,203 @@ impl TournamentEngine {
             return demo::run_offline_demo_tournament(session, attachments, opts, event_tx).await;
         };
 
-        let github_token = opts.github_token.as_deref();
+        let verifier = verifier::HostVerifier::new();
 
-        // Pre-fetch GitHub repository file tree & top source files for Hydrogen, Carbon, and RepoCallGraph
-        let mut repo_snapshot = match repo::fetch_github_repo_snapshot(
-            &session.intake.repo_url,
-            session.intake.commit_sha.as_deref(),
-            session.intake.git_ref.as_deref(),
-            github_token,
-            &session.intake.suspect_files,
-        )
-        .await
+        // Fast local git mirror checkout + full file tree & ~160 source files (no slow HTTP raw fetches)
+        let mut prepared_repo = match verifier
+            .prepare_checkout(
+                &session.intake.repo_url,
+                session.intake.commit_sha.as_deref(),
+                session.intake.git_ref.as_deref(),
+            )
+            .await
         {
-            Ok(snap) => {
+            Ok(prep) => prep,
+            Err(err) => {
+                let msg = format!("Repository checkout failed: {err}");
+                session.stage = TournamentStage::Failed;
+                session.updated_at = Utc::now();
+                repo::emit_event(
+                    &event_tx,
+                    LiveEvent::Error {
+                        session_id: Some(session.id),
+                        message: msg.clone(),
+                    },
+                );
+                repo::emit_event(
+                    &event_tx,
+                    LiveEvent::StageChanged {
+                        session_id: session.id,
+                        stage: TournamentStage::Failed,
+                        message: msg,
+                    },
+                );
+                return Err(err);
+            }
+        };
+
+        let mut repo_snapshot = prepared_repo
+            .load_repo_snapshot(&session.intake.suspect_files)
+            .await
+            .unwrap_or_default();
+
+        repo::emit_log(
+            &event_tx,
+            session.id,
+            LogLevel::Info,
+            "repo",
+            format!(
+                "Checked out {}/{}@{} locally ({}, {} tree entries, {} source files loaded)",
+                repo_snapshot.owner,
+                repo_snapshot.repo,
+                &prepared_repo.resolved_sha[..prepared_repo.resolved_sha.len().min(12)],
+                prepared_repo.runtime.label(),
+                repo_snapshot.file_tree.len(),
+                repo_snapshot.sources.len()
+            ),
+        );
+
+        // Run cached runtime environment setup (uv venv / node_modules) CONCURRENTLY with Stage 1 Hydrogen intake!
+        let (env_res, intake_res) = tokio::join!(
+            prepared_repo.build_environment(),
+            intake::run_intake_stage(gemini, &mut session, &attachments, &repo_snapshot, &event_tx),
+        );
+        intake_res?;
+
+        match env_res {
+            Ok(env) => {
+                if !env.notes.is_empty() {
+                    repo::emit_log(
+                        &event_tx,
+                        session.id,
+                        LogLevel::Info,
+                        "verifier",
+                        format!(
+                            "Host sandbox ready ({}): {}",
+                            prepared_repo.runtime.label(),
+                            env.notes.join("; ")
+                        ),
+                    );
+                }
+                prepared_repo.set_env(env);
+            }
+            Err(err) => {
+                warn!(error = %err, "host verification environment preparation failed");
+                let msg = format!("Host sandbox environment setup failed: {err}");
+                session.stage = TournamentStage::Failed;
+                session.updated_at = Utc::now();
+                repo::emit_event(
+                    &event_tx,
+                    LiveEvent::Error {
+                        session_id: Some(session.id),
+                        message: msg.clone(),
+                    },
+                );
+                repo::emit_event(
+                    &event_tx,
+                    LiveEvent::StageChanged {
+                        session_id: session.id,
+                        stage: TournamentStage::Failed,
+                        message: msg,
+                    },
+                );
+                return Err(err);
+            }
+        }
+
+        // Enrich local repo sources with any newly-discovered suspect files from Stage 1
+        if let Ok(added) = prepared_repo
+            .enrich_snapshot_from_local(&mut repo_snapshot, &session.intake.suspect_files)
+            .await
+        {
+            if added > 0 {
                 repo::emit_log(
                     &event_tx,
                     session.id,
                     LogLevel::Info,
                     "repo",
-                    format!(
-                        "Loaded {}/{}@{} ({} tree entries, {} source files cached)",
-                        snap.owner,
-                        snap.repo,
-                        snap.resolved_ref,
-                        snap.file_tree.len(),
-                        snap.sources.len()
-                    ),
+                    format!("Loaded {added} additional Stage-1 suspect source file(s) from local mirror"),
                 );
-                snap
             }
+        }
+
+        // Stage 2: Independent Host-Verified Locked Red-Gate (fail-fast honestly if unverifiable)
+        let red_gate = match red_gate::run_red_gate_stage(
+            gemini,
+            &mut session,
+            &prepared_repo,
+            &repo_snapshot,
+            &event_tx,
+        )
+        .await
+        {
+            Ok(rg) => rg,
             Err(err) => {
-                warn!(error = %err, "GitHub repo snapshot fetch failed; proceeding with sandbox-only context");
-                repo::emit_log(
+                session.stage = TournamentStage::Failed;
+                session.updated_at = Utc::now();
+                repo::emit_event(
                     &event_tx,
-                    session.id,
-                    LogLevel::Warn,
-                    "repo",
-                    format!("GitHub snapshot unavailable ({err}); sandboxes will clone directly"),
+                    LiveEvent::Error {
+                        session_id: Some(session.id),
+                        message: err.to_string(),
+                    },
                 );
-                repo::RepoSnapshot::default()
+                repo::emit_event(
+                    &event_tx,
+                    LiveEvent::StageChanged {
+                        session_id: session.id,
+                        stage: TournamentStage::Failed,
+                        message: format!("Red-Gate verification failed: {err}"),
+                    },
+                );
+                return Err(err);
             }
         };
-
-        // Stage 1: Hydrogen Multimodal Intake
-        intake::run_intake_stage(gemini, &mut session, &attachments, &repo_snapshot, &event_tx)
-            .await?;
-
-        // Enrich repo sources with any newly-discovered suspect files from Stage 1
-        repo::enrich_snapshot_with_suspects(
-            &mut repo_snapshot,
-            &session.intake.suspect_files,
-            github_token,
-        )
-        .await;
-
-        // Stage 2: Locked Red-Gate Verification
-        let red_gate_res =
-            red_gate::run_red_gate_stage(gemini, &mut session, &repo_snapshot, &event_tx).await?;
 
         // Stage 3: Carbon Dynamic-K Orthogonal Planner
         let mut plan = planner::run_planner_stage(
             gemini,
             &mut session,
-            &red_gate_res.red_gate,
+            &prepared_repo,
+            &red_gate,
             &repo_snapshot,
             &event_tx,
         )
         .await?;
 
-        // Stage 4: Parallel Neon Workers + 0/K Carbon Rescue
-        let workers_res = workers::run_workers_stage(
+        // Ensure all planner target_files_hint entries are loaded locally for Stage 4 & Stage 6
+        let plan_hints: Vec<String> = plan
+            .strategies
+            .iter()
+            .flat_map(|s| s.target_files_hint.iter().cloned())
+            .collect();
+        let _ = prepared_repo
+            .enrich_snapshot_from_local(&mut repo_snapshot, &plan_hints)
+            .await;
+
+        // Stage 4: Parallel Host-Verified Neon Edit-Test Workers + 0/K Carbon Rescue
+        workers::run_workers_stage(
             gemini,
             &mut session,
-            &red_gate_res.worker_agent_id,
-            &red_gate_res.red_gate,
+            &prepared_repo,
+            &red_gate,
             &mut plan,
             &repo_snapshot,
             &event_tx,
         )
         .await?;
 
-        // Stage 5: Single-VM Interleaved Benchmark Arena
+        // Stage 5: Single-Host Interleaved Benchmark Arena + Real Coverage Capture
         let arena_res = arena::run_arena_stage(
-            gemini,
             &mut session,
-            &red_gate_res.worker_agent_id,
-            &red_gate_res.red_gate,
+            &prepared_repo,
+            &red_gate,
             &plan.shared_benchmark_spec,
-            &workers_res.worker_coverage_raw,
             &event_tx,
         )
         .await?;
 
-        // Stage 6: 3-Layer Blast-Radius & Carbon Dual-Score Auditor
+        // Stage 6: 3-Layer Blast-Radius & Concurrent Carbon Dual-Score Auditor
         let recommended = auditor::run_auditor_stage(
             gemini,
             &mut session,

@@ -1,4 +1,6 @@
+use crate::intake::format_multimodal_findings;
 use crate::repo::{emit_event, emit_log, extract_json_from_text, RepoSnapshot};
+use crate::verifier::PreparedRepo;
 use epicenter_common::{
     BenchmarkHarnessSpec, Gemini4Model, LiveEvent, LogLevel, RedGateSpec, StrategyDepthTier,
     StrategyPlan, StrategySpec, TournamentSession, TournamentStage,
@@ -11,13 +13,13 @@ use tracing::warn;
 
 /// Stage 3: `Gemini4Model::Carbon` Dynamic-K (`1..=5`) Orthogonal Strategy Planner.
 ///
-/// Generates orthogonal `StrategySpec`s spanning from `SurgicalHotfix` (minimal footprint) to
-/// `ArchitecturalRootCause` (`allow_caller_tests: true` so Root-Cause workers can add caller
-/// regression tests to eliminate untested dark zones), with explicit `anti_overlap_rules` and
-/// a shared `BenchmarkHarnessSpec`.
+/// Generates orthogonal `StrategySpec`s (defaulting to K=3 crisp strategies spanning
+/// `SurgicalHotfix`, `AlgorithmicOptimization`/`TargetedRefactor`, and `ArchitecturalRootCause`)
+/// with explicit `anti_overlap_rules` and a fast (~20–100ms) self-contained `BenchmarkHarnessSpec`.
 pub async fn run_planner_stage(
     gemini: &GeminiClient,
     session: &mut TournamentSession,
+    prepared: &PreparedRepo,
     red_gate: &RedGateSpec,
     repo: &RepoSnapshot,
     event_tx: &Option<broadcast::Sender<LiveEvent>>,
@@ -34,20 +36,28 @@ pub async fn run_planner_stage(
         },
     );
 
+    let multimodal_block = format_multimodal_findings(&session.intake.multimodal_findings);
+
     let prompt = format!(
         "You are Stage 3 (Dynamic-K Orthogonal Strategy Architect) of the Epicenter tournament.\n\
-         Decide the optimal number of genuinely distinct engineering strategies K in 1..=5 based on\n\
-         the problem's true degrees of freedom (typically 3 strategies unless trivial or deeply architectural).\n\n\
+         Default to K=3 crisp, genuinely orthogonal engineering strategies (range 1..=5 only if\n\
+         the problem clearly demands fewer or more degrees of freedom).\n\n\
          MANDATORY SPECTRUM RULES:\n\
-         - Span from `surgical_hotfix` (minimal footprint, narrowest diff, lowest immediate collateral risk)\n\
-           through `targeted_refactor` or `algorithmic_optimization` (speedup/memory axis)\n\
-           to `architectural_root_cause` (cures the underlying upstream invariant cleanly).\n\
+         - Strategy 1 (`surgical_hotfix`): minimal footprint, narrowest diff, lowest immediate collateral risk.\n\
+         - Strategy 2 (`algorithmic_optimization` or `targeted_refactor`): optimizes hot-path throughput/memory\n\
+           or refactors the local subsystem cleanly.\n\
+         - Strategy 3 (`architectural_root_cause`): cures the underlying upstream invariant cleanly.\n\
          - Set `allow_caller_tests: true` on `architectural_root_cause` strategies so workers can add\n\
            regression tests for untested callers and shrink dark-zone blast-radius risk.\n\
          - Give every strategy explicit `anti_overlap_rules` forbidding it from copying sibling approaches.\n\
-         - Strategy IDs must be short lowercase slugs (e.g. \"s1-hotfix\", \"s2-algorithmic\", \"s3-root-cause\").\n\
-         - Design a `shared_benchmark_spec` with a self-contained runnable command (and optional script_content)\n\
-           that measures hot-path latency in milliseconds over 5..=12 interleaved trials.\n\n\
+         - Strategy IDs must be short lowercase slugs (e.g. \"s1-hotfix\", \"s2-algorithmic\", \"s3-root-cause\").\n\n\
+         FAST ARENA MICRO-BENCHMARK SPEC:\n\
+         - Design `shared_benchmark_spec` with `trials: 5`, `warmup_trials: 1`, `metric_unit: \"ms\"`.\n\
+         - Provide a fast, self-contained `script_content` in {} that exercises the affected code path\n\
+           in ~20–100ms per run (loops over the hot function/API directly, exits 0 on BOTH unmodified\n\
+           baseline and patched code so wall-clock timings are cleanly comparable!).\n\
+         - Keep total Stage 5 benchmark runtime under ~10 seconds across all candidates.\n\n\
+         Repository Runtime: {}\n\
          Issue Title: {}\n\
          Task Kind: {:?}\n\
          Problem Statement:\n{}\n\
@@ -55,8 +65,11 @@ pub async fn run_planner_stage(
          Suspect Files: {:?}\n\
          Red-Gate Test Command: {}\n\
          Red-Gate Locked Path: {:?}\n\n\
+         MULTIMODAL FINDINGS (screenshots / recordings / audio / logs):\n{multimodal_block}\n\n\
          Repository Sources:\n{}\n\n\
          Return STRICT JSON matching the schema.",
+        prepared.runtime.label(),
+        prepared.runtime.label(),
         session.intake.title,
         session.intake.task_kind,
         session.intake.problem_statement,
@@ -69,7 +82,7 @@ pub async fn run_planner_stage(
 
     let mut req = CreateInteractionRequest::for_model(Gemini4Model::Carbon, prompt);
     req.system_instruction = Some(
-        "You are Gemini 4 Carbon, a Principal Systems Architect designing orthogonal tournament strategies. Return strict JSON."
+        "You are Gemini 4 Carbon, a Principal Systems Architect designing orthogonal tournament strategies and a fast micro-benchmark harness. Return strict JSON."
             .to_string(),
     );
     req.response_format = Some(ResponseFormat::json_schema(strategy_plan_schema()));
@@ -170,6 +183,11 @@ pub fn normalize_and_validate_plan(
 
     if plan.shared_benchmark_spec.trials == 0 {
         plan.shared_benchmark_spec.trials = 6;
+    } else {
+        plan.shared_benchmark_spec.trials = plan.shared_benchmark_spec.trials.clamp(3, 7);
+    }
+    if plan.shared_benchmark_spec.warmup_trials == 0 {
+        plan.shared_benchmark_spec.warmup_trials = 1;
     }
     if plan.shared_benchmark_spec.metric_unit.trim().is_empty() {
         plan.shared_benchmark_spec.metric_unit = "ms".to_string();
@@ -190,7 +208,13 @@ fn sanitize_strategy_id(raw: &str, ordinal: usize) -> String {
         .trim()
         .to_ascii_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let trimmed = cleaned.trim_matches('-');
     if trimmed.is_empty() {
@@ -265,7 +289,7 @@ fn fallback_strategy_plan(session: &TournamentSession, red_gate: &RedGateSpec) -
             name: format!("{} hot-path latency", session.intake.title),
             command: red_gate.test_command().to_string(),
             setup_command: None,
-            trials: 6,
+            trials: 5,
             warmup_trials: 1,
             metric_unit: "ms".to_string(),
             entrypoint_contract: match red_gate {

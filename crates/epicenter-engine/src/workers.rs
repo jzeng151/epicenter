@@ -1,62 +1,51 @@
+use crate::intake::format_multimodal_findings;
 use crate::repo::{
-    default_sandbox_allowlist, diff_adds_caller_tests, emit_event, emit_log,
-    extract_json_from_text, extract_unified_diff_from_text, normalize_clone_url,
-    strip_locked_test_from_diff, truncate_str, RepoSnapshot,
+    diff_adds_caller_tests, emit_event, emit_log, extract_json_from_text,
+    extract_unified_diff_from_text, truncate_str, RepoSnapshot,
 };
+use crate::verifier::{FileEdit, NewFileSpec, PreparedRepo};
 use epicenter_common::{
     CandidateResult, CandidateStatus, Gemini4Model, LiveEvent, LogLevel, RedGateSpec,
     StrategyDepthTier, StrategyPlan, StrategySpec, TournamentSession, TournamentStage,
 };
-use epicenter_gemini::{
-    CreateInteractionRequest, GeminiClient, InteractionEnvironment, ResponseFormat,
-};
+use epicenter_gemini::{CreateInteractionRequest, GeminiClient, ResponseFormat};
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tracing::warn;
 
-const WORKER_POLL_INTERVAL: Duration = Duration::from_secs(3);
-const WORKER_TIMEOUT: Duration = Duration::from_secs(720);
+const MAX_EDIT_TEST_LOOPS: u8 = 3;
+const STRATEGY_DEADLINE: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Deserialize)]
-struct WorkerOutput {
+struct WorkerEditOutput {
+    #[serde(default)]
+    edits: Vec<FileEdit>,
+    #[serde(default)]
+    new_files: Vec<NewFileSpec>,
     #[serde(default)]
     git_diff: String,
     #[serde(default)]
-    repro_passed: bool,
-    #[serde(default)]
-    regression_suite_passed: bool,
-    #[serde(default)]
-    test_output_tail: String,
-    #[serde(default)]
-    added_caller_tests: bool,
-    #[serde(default)]
-    coverage_report: Option<String>,
+    rationale: String,
 }
 
-/// Output of Stage 4 including optional per-candidate raw coverage payloads captured in worker sandboxes.
-#[derive(Debug, Default)]
-pub struct WorkersStageResult {
-    pub worker_coverage_raw: BTreeMap<String, String>,
-}
-
-/// Stage 4: Parallel `Neon` Managed Agent Workers + `0/K` Carbon Rescue Loop.
+/// Stage 4: Parallel `Gemini4Model::Neon` Edit-Test Workers + `0/K` Carbon Rescue Loop,
+/// 100% independently verified on the host via `PreparedRepo::verify_candidate_patch`.
 ///
-/// Spawns all `K` strategies concurrently (`futures::future::join_all`) with up to 4 internal
-/// edit-and-test loops inside each sandbox, strips/rejects any diff hunks touching
-/// `red_gate.locked_test_path()`, preserves failed candidates in `session.candidates`, and triggers
-/// a single Carbon-designed rescue strategy + Neon sandbox if `0` of `K` candidates pass.
+/// Spawns all `K` strategies concurrently (`futures::future::join_all`) with up to 3 fast
+/// edit-and-test iterations (bounded by a 90s per-strategy deadline). Zero self-reported
+/// test outcomes: every pass/fail, regression verdict, output tail, and anti-tampering check
+/// comes strictly from `HostVerifier`.
 pub async fn run_workers_stage(
     gemini: &GeminiClient,
     session: &mut TournamentSession,
-    worker_agent_id: &str,
+    prepared: &PreparedRepo,
     red_gate: &RedGateSpec,
     plan: &mut StrategyPlan,
     repo: &RepoSnapshot,
     event_tx: &Option<broadcast::Sender<LiveEvent>>,
-) -> anyhow::Result<WorkersStageResult> {
+) -> anyhow::Result<()> {
     session.stage = TournamentStage::Executing;
     session.updated_at = chrono::Utc::now();
     emit_event(
@@ -65,8 +54,9 @@ pub async fn run_workers_stage(
             session_id: session.id,
             stage: TournamentStage::Executing,
             message: format!(
-                "Stage 4 — Spawning {} parallel Neon sandboxes (4 internal edit-test loops each)",
-                plan.strategies.len()
+                "Stage 4 — Launching {} parallel Neon edit-test workers ({} loops max, host-verified)",
+                plan.strategies.len(),
+                MAX_EDIT_TEST_LOOPS
             ),
         },
     );
@@ -85,45 +75,37 @@ pub async fn run_workers_stage(
                 session_id: session.id,
                 strategy_id: strat.id.clone(),
                 status: CandidateStatus::Running,
-                detail: format!("Launching Neon sandbox for '{}'", strat.title),
+                detail: format!("Running host-verified Neon loop for '{}'", strat.title),
             },
         );
     }
+
+    let multimodal_block = format_multimodal_findings(&session.intake.multimodal_findings);
 
     let futures_vec = plan.strategies.iter().map(|strat| {
         execute_single_worker(
             gemini,
             session.id,
-            &session.intake.repo_url,
-            session.intake.commit_sha.as_deref(),
-            session.intake.git_ref.as_deref(),
             &session.intake.title,
             &session.intake.problem_statement,
-            worker_agent_id,
+            &session.intake.repro_steps,
+            &session.intake.suspect_files,
+            &multimodal_block,
+            prepared,
+            repo,
             red_gate,
             strat,
+            Gemini4Model::Neon,
             false,
             event_tx,
         )
     });
 
     let results = futures::future::join_all(futures_vec).await;
-    let mut coverage_raw = BTreeMap::new();
-    let mut updated_candidates = Vec::with_capacity(results.len());
-
-    for (cand, cov_opt) in results {
-        if let Some(cov) = cov_opt {
-            if !cov.trim().is_empty() {
-                coverage_raw.insert(cand.strategy_id.clone(), cov);
-            }
-        }
-        updated_candidates.push(cand);
-    }
-
-    session.candidates = updated_candidates;
+    session.candidates = results;
     session.updated_at = chrono::Utc::now();
 
-    // 0/K Rescue: if zero strategies passed both repro & regression tests, ask Carbon for 1 rescue strategy
+    // 0/K Rescue: if zero strategies passed independent host verification, invoke Carbon rescue.
     let green_count = session.candidates.iter().filter(|c| c.is_green()).count();
     if green_count == 0 && !session.candidates.is_empty() {
         emit_log(
@@ -132,7 +114,7 @@ pub async fn run_workers_stage(
             LogLevel::Warn,
             "workers",
             format!(
-                "0/{} candidates passed tests; invoking Gemini 4 Carbon for 1 rescue strategy",
+                "0/{} candidates passed independent host verification; invoking Gemini 4 Carbon for 1 rescue strategy",
                 session.candidates.len()
             ),
         );
@@ -140,6 +122,7 @@ pub async fn run_workers_stage(
         let rescue_spec = design_carbon_rescue_strategy(
             gemini,
             session,
+            &multimodal_block,
             red_gate,
             repo,
             &session.candidates,
@@ -161,223 +144,368 @@ pub async fn run_workers_stage(
                 session_id: session.id,
                 strategy_id: rescue_spec.id.clone(),
                 status: CandidateStatus::Running,
-                detail: format!("Launching 0/K Rescue Neon sandbox for '{}'", rescue_spec.title),
+                detail: format!(
+                    "Running host-verified 0/K Carbon rescue for '{}'",
+                    rescue_spec.title
+                ),
             },
         );
 
-        let (rescue_cand, rescue_cov) = execute_single_worker(
+        let rescue_cand = execute_single_worker(
             gemini,
             session.id,
-            &session.intake.repo_url,
-            session.intake.commit_sha.as_deref(),
-            session.intake.git_ref.as_deref(),
             &session.intake.title,
             &session.intake.problem_statement,
-            worker_agent_id,
+            &session.intake.repro_steps,
+            &session.intake.suspect_files,
+            &multimodal_block,
+            prepared,
+            repo,
             red_gate,
             &rescue_spec,
+            Gemini4Model::Carbon,
             true,
             event_tx,
         )
         .await;
 
-        if let Some(cov) = rescue_cov {
-            if !cov.trim().is_empty() {
-                coverage_raw.insert(rescue_cand.strategy_id.clone(), cov);
-            }
-        }
         session.candidates.push(rescue_cand);
         session.updated_at = chrono::Utc::now();
     }
 
-    Ok(WorkersStageResult {
-        worker_coverage_raw: coverage_raw,
-    })
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn execute_single_worker(
     gemini: &GeminiClient,
     session_id: uuid::Uuid,
-    repo_url: &str,
-    commit_sha: Option<&str>,
-    git_ref: Option<&str>,
     issue_title: &str,
     problem_statement: &str,
-    worker_agent_id: &str,
+    repro_steps: &[String],
+    suspect_files: &[String],
+    multimodal_block: &str,
+    prepared: &PreparedRepo,
+    repo: &RepoSnapshot,
     red_gate: &RedGateSpec,
     strategy: &StrategySpec,
+    primary_model: Gemini4Model,
     is_rescue_candidate: bool,
     event_tx: &Option<broadcast::Sender<LiveEvent>>,
-) -> (CandidateResult, Option<String>) {
-    let clone_url = normalize_clone_url(repo_url);
+) -> CandidateResult {
     let locked_path = red_gate.locked_test_path();
+    let deadline = Instant::now() + STRATEGY_DEADLINE;
 
-    let checkout_step = match (commit_sha, git_ref) {
-        (Some(sha), _) if !sha.trim().is_empty() => format!("Run `git checkout {}` first.", sha.trim()),
-        (_, Some(r)) if !r.trim().is_empty() => format!("Run `git checkout {}` first.", r.trim()),
-        _ => "Start from the checked-out HEAD in /workspace/repo.".to_string(),
-    };
+    let mut combined_hints: Vec<String> = strategy.target_files_hint.clone();
+    for s in suspect_files {
+        if !combined_hints.contains(s) {
+            combined_hints.push(s.clone());
+        }
+    }
+    let source_context = repo.prompt_source_context(&combined_hints, 36_000);
 
     let caller_test_rule = if strategy.allow_caller_tests {
-        "CALLER TESTS ALLOWED: You are encouraged to add targeted regression tests for Ring 1 callers (in a separate test file, NEVER modifying the locked repro test) to eliminate untested dark zones."
+        "CALLER TESTS ALLOWED: Add targeted regression tests for Ring 1 callers in a separate file via `new_files` (NEVER editing the locked Red-Gate test) to eliminate untested dark zones."
     } else {
-        "Keep tests minimal: do NOT modify unrelated test suites."
+        "Keep edits minimal and strictly scoped; do NOT modify unrelated test suites."
     };
 
     let locked_rule = match locked_path {
         Some(path) => format!(
-            "IMMUTABLE LOCKED RED-GATE FILE: `{path}`. Apply the Red-Gate patch below first, then NEVER edit, weaken, skip, or delete `{path}`! Any diff touching `{path}` will be automatically stripped and rejected."
+            "IMMUTABLE LOCKED RED-GATE FILE: `{path}`. NEVER include `{path}` in `edits`, `new_files`, or `git_diff`! The host verifier independently applies `{path}` from server memory and immediately rejects tampering."
         ),
-        None => "Apply the Red-Gate acceptance patch below first and NEVER weaken its assertions.".to_string(),
+        None => "The host verifier applies the immutable Red-Gate acceptance patch independently; never weaken test assertions.".to_string(),
     };
-
-    let prompt = format!(
-        "You are an autonomous Gemini 4 Neon worker inside /workspace/repo.\n\
-         {checkout_step}\n\
-         {locked_rule}\n\
-         {caller_test_rule}\n\n\
-         STRATEGY ASSIGNMENT:\n\
-         - Strategy ID: {id}\n\
-         - Title: {title}\n\
-         - Depth Tier: {tier:?}\n\
-         - Thesis: {thesis}\n\
-         - Tradeoff Axis: {axis}\n\
-         - Target Files Hint: {targets:?}\n\
-         - Anti-Overlap Rules: {anti:?}\n\n\
-         ISSUE:\n\
-         Title: {issue_title}\n\
-         Problem Statement:\n{problem_statement}\n\n\
-         LOCKED RED-GATE TEST COMMAND: {test_cmd}\n\
-         LOCKED RED-GATE PATCH:\n```diff\n{red_patch}\n```\n\n\
-         EXECUTION PROTOCOL (up to 4 internal edit-and-test loops):\n\
-         1. Apply the locked Red-Gate patch (if non-empty) and confirm baseline status.\n\
-         2. Implement ONLY your assigned strategy cleanly.\n\
-         3. Run `{test_cmd}` AND the repository's existing regression test suite.\n\
-         4. If tests fail, diagnose and iterate up to 4 edit-and-test loops inside this sandbox.\n\
-         5. Before exporting `git_diff`, exclude the locked Red-Gate test path (`git diff -- . ':(exclude){exclude}'` if applicable) so `git_diff` contains ONLY your fix (and optional caller tests if allowed).\n\
-         6. Optionally run coverage (`pytest --cov` / `coverage json` / `lcov`) if fast.\n\n\
-         Return STRICT JSON ONLY:\n\
-         {{\n\
-           \"git_diff\": \"diff --git a/... b/...\\n...\",\n\
-           \"repro_passed\": true,\n\
-           \"regression_suite_passed\": true,\n\
-           \"test_output_tail\": \"last ~40 lines of test output\",\n\
-           \"added_caller_tests\": false,\n\
-           \"coverage_report\": null\n\
-         }}",
-        id = strategy.id,
-        title = strategy.title,
-        tier = strategy.depth_tier,
-        thesis = strategy.thesis,
-        axis = strategy.tradeoff_axis,
-        targets = strategy.target_files_hint,
-        anti = strategy.anti_overlap_rules,
-        test_cmd = red_gate.test_command(),
-        red_patch = truncate_str(red_gate.patch(), 8_000),
-        exclude = locked_path.unwrap_or(""),
-    );
-
-    let mut req = CreateInteractionRequest::for_agent(worker_agent_id, prompt);
-    req.environment = Some(InteractionEnvironment::remote_repo(
-        clone_url,
-        git_ref.map(String::from),
-        commit_sha.map(String::from),
-        default_sandbox_allowlist(),
-    ));
-    req.background = Some(true);
 
     let mut cand = CandidateResult::pending(strategy.id.clone());
     cand.is_rescue_candidate = is_rescue_candidate;
 
-    let mut cov_raw: Option<String> = None;
+    let mut last_feedback = String::new();
+    let mut last_diff_snippet = String::new();
 
-    match gemini
-        .run_background_interaction(req, WORKER_POLL_INTERVAL, WORKER_TIMEOUT)
-        .await
-    {
-        Ok(resp) => {
-            let text = resp.extract_text();
-            match extract_json_from_text::<WorkerOutput>(&text) {
-                Ok(out) => {
-                    let mut diff = if out.git_diff.trim().is_empty() {
-                        extract_unified_diff_from_text(&text)
-                    } else {
-                        out.git_diff
-                    };
+    for iter in 1..=MAX_EDIT_TEST_LOOPS {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            emit_log(
+                event_tx,
+                session_id,
+                LogLevel::Warn,
+                format!("worker:{}", strategy.id),
+                format!("Reached {}s per-strategy deadline before loop {iter}", STRATEGY_DEADLINE.as_secs()),
+            );
+            break;
+        };
+        if remaining < Duration::from_secs(3) {
+            break;
+        }
 
-                    let mut tampered = false;
-                    if let Some(lp) = locked_path {
-                        let (cleaned, stripped) = strip_locked_test_from_diff(&diff, lp);
-                        if stripped > 0 {
-                            tampered = true;
-                            diff = cleaned;
-                            emit_log(
-                                event_tx,
-                                session_id,
-                                LogLevel::Warn,
-                                format!("worker:{}", strategy.id),
-                                format!(
-                                    "Stripped {stripped} diff hunk(s) touching locked Red-Gate test '{lp}'"
-                                ),
-                            );
-                        }
-                    }
+        // Use primary_model (Neon for regular strategies, Carbon on loop 1 of 0/K rescue then Neon).
+        let model = if is_rescue_candidate && iter == 1 {
+            primary_model
+        } else {
+            Gemini4Model::Neon
+        };
 
-                    cand.git_diff = diff;
-                    let has_patch = !cand.git_diff.trim().is_empty();
-                    cand.repro_passed = out.repro_passed && has_patch && !tampered;
-                    cand.regression_suite_passed =
-                        out.regression_suite_passed && has_patch && !tampered;
-                    cand.test_output_tail = if tampered {
-                        format!(
-                            "[REJECTED: attempted edit to locked Red-Gate test]\n{}",
-                            truncate_str(&out.test_output_tail, 1500)
-                        )
-                    } else {
-                        truncate_str(&out.test_output_tail, 2000)
-                    };
-                    cand.added_caller_tests =
-                        out.added_caller_tests || diff_adds_caller_tests(&cand.git_diff, locked_path);
-                    cand.status = if cand.is_green() {
-                        CandidateStatus::PassedTests
-                    } else {
-                        CandidateStatus::FailedTests
-                    };
-                    cov_raw = out.coverage_report;
+        let feedback_block = if last_feedback.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\nPREVIOUS ITERATION FAILED INDEPENDENT HOST VERIFICATION (loop {}/{MAX_EDIT_TEST_LOOPS}):\n\
+                 Host Failure Diagnostic & Real Test Output:\n{}\n\
+                 Previous Patch Snippet:\n```diff\n{}\n```\n\
+                 IMPORTANT: Each iteration is applied against CLEAN base HEAD, so return the COMPLETE corrected `edits` (and optional `new_files`) from base HEAD!\n",
+                iter - 1,
+                truncate_str(&last_feedback, 1500),
+                truncate_str(&last_diff_snippet, 1200),
+            )
+        };
+
+        let prompt = format!(
+            "You are a fast Gemini 4 worker implementing ONE assigned strategy in the Epicenter tournament.\n\
+             Repository Runtime: {}\n\
+             {locked_rule}\n\
+             {caller_test_rule}\n\n\
+             STRATEGY ASSIGNMENT:\n\
+             - Strategy ID: {id}\n\
+             - Title: {title}\n\
+             - Depth Tier: {tier:?}\n\
+             - Thesis: {thesis}\n\
+             - Tradeoff Axis: {axis}\n\
+             - Target Files Hint: {targets:?}\n\
+             - Anti-Overlap Rules: {anti:?}\n\n\
+             ISSUE:\n\
+             Title: {issue_title}\n\
+             Problem Statement:\n{problem_statement}\n\
+             Repro Steps: {repro_steps:?}\n\n\
+             MULTIMODAL FINDINGS (screenshots / recordings / audio / logs):\n{multimodal_block}\n\n\
+             LOCKED RED-GATE TEST COMMAND: {test_cmd}\n\
+             LOCKED RED-GATE PATCH (applied automatically by host verifier — DO NOT emit edits to this file):\n\
+             ```diff\n{red_patch}\n```\n\
+             {feedback_block}\n\
+             EXACT BASE-HEAD REPOSITORY SOURCES (copy `old_text` VERBATIM from these files):\n\
+             {source_context}\n\n\
+             OUTPUT INSTRUCTIONS:\n\
+             - Return STRICT JSON matching the schema.\n\
+             - Use `edits: [{{ \"path\", \"old_text\", \"new_text\" }}]` for modifying existing files — copy `old_text` verbatim with 2-4 unique surrounding context lines so replacement is exact.\n\
+             - Use `new_files: [{{ \"path\", \"content\" }}]` only if creating a brand-new file (e.g., caller regression tests when allowed).\n\
+             - Do NOT self-report test results; the host sandbox independently applies your patch and runs all tests.",
+            prepared.runtime.label(),
+            id = strategy.id,
+            title = strategy.title,
+            tier = strategy.depth_tier,
+            thesis = strategy.thesis,
+            axis = strategy.tradeoff_axis,
+            targets = strategy.target_files_hint,
+            anti = strategy.anti_overlap_rules,
+            test_cmd = red_gate.test_command(),
+            red_patch = truncate_str(red_gate.patch(), 8_000),
+        );
+
+        let mut req = CreateInteractionRequest::for_model(model, prompt);
+        req.system_instruction = Some(
+            "You are a precision software engineer returning exact search-and-replace `edits` in strict JSON. \
+             Copy `old_text` verbatim from the provided source files. Never touch the locked Red-Gate test file."
+                .to_string(),
+        );
+        req.response_format = Some(ResponseFormat::json_schema(worker_edit_schema()));
+
+        let api_res = tokio::time::timeout(remaining, gemini.create_interaction(&req)).await;
+        let resp = match api_res {
+            Ok(Ok(r)) => r,
+            Ok(Err(err)) => {
+                warn!(strategy = %strategy.id, iter, error = %err, "worker model call failed");
+                last_feedback = format!("Model API error on loop {iter}: {err}");
+                if cand.test_output_tail.is_empty() {
+                    cand.test_output_tail = last_feedback.clone();
                 }
-                Err(err) => {
-                    warn!(strategy = %strategy.id, error = %err, "worker response JSON parse failed");
-                    let recovered_diff = extract_unified_diff_from_text(&text);
-                    if let Some(lp) = locked_path {
-                        let (cleaned, _) = strip_locked_test_from_diff(&recovered_diff, lp);
-                        cand.git_diff = cleaned;
-                    } else {
-                        cand.git_diff = recovered_diff;
-                    }
-                    cand.status = CandidateStatus::FailedTests;
+                continue;
+            }
+            Err(_) => {
+                warn!(strategy = %strategy.id, iter, "worker hit 90s per-strategy deadline");
+                if cand.test_output_tail.is_empty() {
                     cand.test_output_tail = format!(
-                        "Worker output parse error ({err}): {}",
-                        truncate_str(&text, 1000)
+                        "Strategy reached {}s per-strategy deadline on loop {iter}",
+                        STRATEGY_DEADLINE.as_secs()
                     );
                 }
+                break;
             }
+        };
+
+        let raw_text = resp.extract_text();
+        let out = match extract_json_from_text::<WorkerEditOutput>(&raw_text) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                // Attempt raw unified diff extraction fallback if model output a diff block
+                let fallback_diff = extract_unified_diff_from_text(&raw_text);
+                if !fallback_diff.trim().is_empty() {
+                    WorkerEditOutput {
+                        edits: Vec::new(),
+                        new_files: Vec::new(),
+                        git_diff: fallback_diff,
+                        rationale: String::new(),
+                    }
+                } else {
+                    last_feedback = format!(
+                        "Invalid JSON response ({err}). Return strict JSON with `edits` array. Snippet: {}",
+                        truncate_str(&raw_text, 400)
+                    );
+                    cand.test_output_tail = last_feedback.clone();
+                    continue;
+                }
+            }
+        };
+
+        if !out.rationale.trim().is_empty() {
+            emit_log(
+                event_tx,
+                session_id,
+                LogLevel::Info,
+                format!("worker:{}", strategy.id),
+                format!("Loop {iter}/{MAX_EDIT_TEST_LOOPS}: {}", truncate_str(out.rationale.trim(), 180)),
+            );
         }
-        Err(err) => {
-            warn!(strategy = %strategy.id, error = %err, "Neon worker sandbox failed");
-            cand.status = CandidateStatus::FailedTests;
-            cand.test_output_tail = format!("Sandbox execution error: {err}");
+
+        // Convert structured `edits` + `new_files` into a canonical `git diff` via host worktree.
+        let candidate_diff = if !out.edits.is_empty() || !out.new_files.is_empty() {
+            match prepared
+                .synthesize_diff_from_edits(&out.edits, &out.new_files, locked_path)
+                .await
+            {
+                Ok(app) if app.tampered => {
+                    let msg = app.errors.join("; ");
+                    emit_log(
+                        event_tx,
+                        session_id,
+                        LogLevel::Warn,
+                        format!("worker:{}", strategy.id),
+                        msg.clone(),
+                    );
+                    cand.repro_passed = false;
+                    cand.regression_suite_passed = false;
+                    cand.test_output_tail = msg.clone();
+                    last_feedback = msg;
+                    continue;
+                }
+                Ok(app) if !app.errors.is_empty() => {
+                    let err_summary = format!(
+                        "Structured edit application failed:\n- {}\nEnsure `old_text` matches base HEAD verbatim.",
+                        app.errors.join("\n- ")
+                    );
+                    cand.test_output_tail = err_summary.clone();
+                    last_feedback = err_summary;
+                    continue;
+                }
+                Ok(app) => app.git_diff,
+                Err(err) => {
+                    last_feedback = format!("Host edit synthesis error: {err}");
+                    cand.test_output_tail = last_feedback.clone();
+                    continue;
+                }
+            }
+        } else {
+            let extracted = extract_unified_diff_from_text(&out.git_diff);
+            if extracted.is_empty() {
+                out.git_diff.clone()
+            } else {
+                extracted
+            }
+        };
+
+        if candidate_diff.trim().is_empty() {
+            last_feedback =
+                "Candidate produced an empty diff (no file changes). Provide concrete `edits` solving the issue."
+                    .to_string();
+            cand.test_output_tail = last_feedback.clone();
+            continue;
+        }
+
+        // 100% INDEPENDENT HOST VERIFICATION (anti-tampering + git apply + locked repro + regression).
+        match prepared
+            .verify_candidate_patch(
+                &candidate_diff,
+                locked_path,
+                red_gate.patch(),
+                red_gate.test_command(),
+            )
+            .await
+        {
+            Ok(verdict) => {
+                if verdict.tampered {
+                    emit_log(
+                        event_tx,
+                        session_id,
+                        LogLevel::Warn,
+                        format!("worker:{}", strategy.id),
+                        verdict.test_output_tail.clone(),
+                    );
+                    cand.git_diff.clear();
+                    cand.repro_passed = false;
+                    cand.regression_suite_passed = false;
+                    cand.test_output_tail = verdict.test_output_tail.clone();
+                    last_feedback = verdict.test_output_tail;
+                    last_diff_snippet.clear();
+                    continue;
+                }
+
+                cand.git_diff = candidate_diff.clone();
+                cand.repro_passed = verdict.repro_passed;
+                cand.regression_suite_passed = verdict.regression_suite_passed;
+                cand.test_output_tail = verdict.test_output_tail.clone();
+                cand.added_caller_tests = diff_adds_caller_tests(&cand.git_diff, locked_path);
+
+                if verdict.repro_passed && verdict.regression_suite_passed {
+                    cand.status = CandidateStatus::PassedTests;
+                    emit_log(
+                        event_tx,
+                        session_id,
+                        LogLevel::Info,
+                        format!("worker:{}", strategy.id),
+                        format!(
+                            "HostVerifier PASSED locked repro + module regression on loop {iter}/{MAX_EDIT_TEST_LOOPS} (caller_tests={})",
+                            cand.added_caller_tests
+                        ),
+                    );
+                    break;
+                }
+
+                let reason = verdict
+                    .failure_reason
+                    .unwrap_or_else(|| "test verification failed".to_string());
+                emit_log(
+                    event_tx,
+                    session_id,
+                    LogLevel::Warn,
+                    format!("worker:{}", strategy.id),
+                    format!(
+                        "Loop {iter}/{MAX_EDIT_TEST_LOOPS} host verification failed: {}",
+                        truncate_str(&reason, 200)
+                    ),
+                );
+                last_feedback = format!("{reason}\n\n{}", verdict.test_output_tail);
+                last_diff_snippet = candidate_diff;
+            }
+            Err(err) => {
+                warn!(strategy = %strategy.id, iter, error = %err, "HostVerifier error");
+                last_feedback = format!("HostVerifier error: {err}");
+                cand.test_output_tail = last_feedback.clone();
+            }
         }
     }
 
+    cand.status = if cand.is_green() {
+        CandidateStatus::PassedTests
+    } else {
+        CandidateStatus::FailedTests
+    };
+
     let detail = if cand.is_green() {
         format!(
-            "Passed locked Red-Gate + regression suite (caller_tests={})",
+            "Host-verified PASS on locked Red-Gate + regression suite (caller_tests={})",
             cand.added_caller_tests
         )
     } else {
         format!(
-            "Failed verification (repro={}, regression={})",
+            "Failed host verification (repro={}, regression={})",
             cand.repro_passed, cand.regression_suite_passed
         )
     };
@@ -399,12 +527,13 @@ async fn execute_single_worker(
         },
     );
 
-    (cand, cov_raw)
+    cand
 }
 
 async fn design_carbon_rescue_strategy(
     gemini: &GeminiClient,
     session: &TournamentSession,
+    multimodal_block: &str,
     red_gate: &RedGateSpec,
     repo: &RepoSnapshot,
     failed_candidates: &[CandidateResult],
@@ -413,7 +542,7 @@ async fn design_carbon_rescue_strategy(
         .iter()
         .map(|c| {
             format!(
-                "Strategy `{}` (repro={}, regression={}):\nTail:\n{}\nDiff snippet:\n{}\n",
+                "Strategy `{}` (repro={}, regression={}):\nReal Host Test Output:\n{}\nDiff snippet:\n{}\n",
                 c.strategy_id,
                 c.repro_passed,
                 c.regression_suite_passed,
@@ -425,11 +554,12 @@ async fn design_carbon_rescue_strategy(
         .join("\n---\n");
 
     let prompt = format!(
-        "All {} initial tournament strategies failed verification on '{}'.\n\
-         Diagnose WHY every attempt failed from the test logs below and design ONE surgical,\n\
+        "All {} initial tournament strategies failed independent host verification on '{}'.\n\
+         Diagnose WHY every attempt failed from the real host test logs below and design ONE surgical,\n\
          high-conviction rescue StrategySpec (`id: \"s-rescue-carbon\"`) that directly fixes the\n\
          root cause without repeating the failed mistakes.\n\n\
          Problem Statement:\n{}\n\
+         MULTIMODAL FINDINGS:\n{multimodal_block}\n\
          Red-Gate Command: {}\n\n\
          Failed Candidate Logs:\n{}\n\n\
          Repository Sources:\n{}\n\n\
@@ -462,7 +592,7 @@ async fn design_carbon_rescue_strategy(
     StrategySpec {
         id: "s-rescue-carbon".to_string(),
         title: "Carbon Rescue Root-Cause Fix".to_string(),
-        thesis: "Synthesize failure logs from prior candidates to fix the exact failing assertion cleanly without breaking existing callers."
+        thesis: "Synthesize real host failure logs from prior candidates to fix the exact failing assertion cleanly without breaking existing callers."
             .to_string(),
         tradeoff_axis: "Verified green pass reliability over speculative optimizations".to_string(),
         target_files_hint: session.intake.suspect_files.clone(),
@@ -473,6 +603,40 @@ async fn design_carbon_rescue_strategy(
         ],
         allow_caller_tests: true,
     }
+}
+
+fn worker_edit_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "edits": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "old_text": { "type": "string" },
+                        "new_text": { "type": "string" }
+                    },
+                    "required": ["path", "old_text", "new_text"]
+                }
+            },
+            "new_files": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "content": { "type": "string" }
+                    },
+                    "required": ["path", "content"]
+                }
+            },
+            "git_diff": { "type": "string" },
+            "rationale": { "type": "string" }
+        },
+        "required": ["edits", "rationale"]
+    })
 }
 
 fn rescue_strategy_schema() -> serde_json::Value {
