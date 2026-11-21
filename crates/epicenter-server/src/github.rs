@@ -224,9 +224,9 @@ pub fn parse_unified_diff(diff: &str) -> Result<Vec<FilePatch>> {
     for raw_line in diff.lines() {
         let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
 
-        if line.starts_with("diff --git ") {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
             flush_patch(&mut patches, &mut current_patch, &mut current_hunk);
-            let mut parts = line["diff --git ".len()..].split_whitespace();
+            let mut parts = rest.split_whitespace();
             let old_p = parts.next().and_then(strip_diff_prefix);
             let new_p = parts.next().and_then(strip_diff_prefix);
             current_patch = Some(FilePatch {
@@ -253,7 +253,7 @@ pub fn parse_unified_diff(diff: &str) -> Result<Vec<FilePatch>> {
             continue;
         }
 
-        if line.starts_with("--- ") {
+        if let Some(raw_path) = line.strip_prefix("--- ") {
             if current_patch.is_none() {
                 current_patch = Some(FilePatch {
                     old_path: None,
@@ -264,7 +264,6 @@ pub fn parse_unified_diff(diff: &str) -> Result<Vec<FilePatch>> {
                 });
             }
             if let Some(p) = current_patch.as_mut() {
-                let raw_path = &line[4..];
                 let parsed = strip_diff_prefix(raw_path.split('\t').next().unwrap_or(raw_path));
                 if parsed.is_none() {
                     p.is_new_file = true;
@@ -275,9 +274,8 @@ pub fn parse_unified_diff(diff: &str) -> Result<Vec<FilePatch>> {
             continue;
         }
 
-        if line.starts_with("+++ ") {
+        if let Some(raw_path) = line.strip_prefix("+++ ") {
             if let Some(p) = current_patch.as_mut() {
-                let raw_path = &line[4..];
                 let parsed = strip_diff_prefix(raw_path.split('\t').next().unwrap_or(raw_path));
                 if parsed.is_none() {
                     p.is_deleted_file = true;

@@ -49,14 +49,13 @@ impl FileDiff {
     /// Returns true if any hunk or added/deleted anchor overlaps `start_line..=end_line`.
     pub fn touches_line_range(&self, start_line: usize, end_line: usize) -> bool {
         for hunk in &self.hunks {
-            if !hunk.added_lines.is_empty() {
-                if hunk
+            if !hunk.added_lines.is_empty()
+                && hunk
                     .added_lines
                     .iter()
                     .any(|&line| line >= start_line && line <= end_line)
-                {
-                    return true;
-                }
+            {
+                return true;
             }
             let (hs, he) = hunk.touched_new_span();
             if hs <= end_line && he >= start_line {

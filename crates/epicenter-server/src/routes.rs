@@ -157,7 +157,7 @@ pub async fn upload_attachment(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> Result<Json<AttachmentMeta>, ApiError> {
-    while let Some(field) = multipart
+    if let Some(field) = multipart
         .next_field()
         .await
         .map_err(|e| ApiError::bad_request(format!("invalid multipart payload: {e}")))?
@@ -553,8 +553,10 @@ fn spawn_tournament_background(
 
     // Authoritative engine execution task.
     tokio::spawn(async move {
-        let mut opts = EngineRunOptions::default();
-        opts.github_token = state.github.token().map(str::to_string);
+        let opts = EngineRunOptions {
+            github_token: state.github.token().map(str::to_string),
+            ..Default::default()
+        };
 
         let result = state
             .engine
@@ -659,21 +661,19 @@ pub async fn session_events_sse(
     let initial_stream = stream::once(async move { Ok(encode_sse_event(&initial_event)) });
 
     let live_stream = stream::unfold(rx, move |mut rx| async move {
-        loop {
-            match rx.recv().await {
-                Ok(ev) => return Some((Ok(encode_sse_event(&ev)), rx)),
-                Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                    let notice = LiveEvent::Log {
-                        session_id: id,
-                        level: epicenter_common::LogLevel::Warn,
-                        source: "epicenter-server".to_string(),
-                        message: format!("SSE subscriber skipped {skipped} lagged events"),
-                        timestamp: Utc::now(),
-                    };
-                    return Some((Ok(encode_sse_event(&notice)), rx));
-                }
-                Err(broadcast::error::RecvError::Closed) => return None,
+        match rx.recv().await {
+            Ok(ev) => Some((Ok(encode_sse_event(&ev)), rx)),
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                let notice = LiveEvent::Log {
+                    session_id: id,
+                    level: epicenter_common::LogLevel::Warn,
+                    source: "epicenter-server".to_string(),
+                    message: format!("SSE subscriber skipped {skipped} lagged events"),
+                    timestamp: Utc::now(),
+                };
+                Some((Ok(encode_sse_event(&notice)), rx))
             }
+            Err(broadcast::error::RecvError::Closed) => None,
         }
     });
 

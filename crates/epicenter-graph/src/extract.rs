@@ -637,9 +637,9 @@ fn extract_fallback(file_path: &str, source: &str) -> FileSymbols {
                 for seg in m
                     .as_str()
                     .trim_matches('"')
-                    .split(|c| c == ':' || c == '.' || c == '/')
+                    .split([':', '.', '/'])
                 {
-                    let s = seg.trim_matches(|c| c == '{' || c == '}' || c == ',');
+                    let s = seg.trim_matches(['{', '}', ',']);
                     if !s.is_empty() {
                         imports.push(s.to_string());
                     }
