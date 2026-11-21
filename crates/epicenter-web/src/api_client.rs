@@ -2,13 +2,46 @@ use chrono::{DateTime, Utc};
 use epicenter_common::{
     AttachmentMeta, CandidateArenaMetrics, CandidateResult, CandidateStatus, CreatePrRequest,
     CreatePrResponse, CreateSessionRequest, CreateSessionResponse, ExportBundleResponse, LiveEvent,
-    LogLevel, ServerStatusResponse, SessionListItem, TournamentSession, TournamentStage,
+    LogLevel, ServerStatusResponse, SessionListItem, TaskKind, TournamentSession, TournamentStage,
 };
 use gloo_net::http::Request;
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize};
 use uuid::Uuid;
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use web_sys::{EventSource, FormData, MessageEvent};
+
+/// Response from `POST /api/presets/real-bug` providing a real pinned GitHub bug + screenshot attachment.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RealBugPresetResponse {
+    pub repo_url: String,
+    #[serde(default)]
+    pub commit_sha: Option<String>,
+    #[serde(default)]
+    pub git_ref: Option<String>,
+    #[serde(default)]
+    pub pr_url: Option<String>,
+    pub task_kind: TaskKind,
+    pub title: String,
+    pub problem_statement: String,
+    #[serde(default)]
+    pub attachment: Option<AttachmentMeta>,
+}
+
+/// Single extracted video keyframe returned by `GET /api/attachments/{id}/keyframes`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct KeyframeItem {
+    pub index: usize,
+    pub timestamp_hint: String,
+    pub data_url: String,
+}
+
+/// Response from `GET /api/attachments/{id}/keyframes`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct AttachmentKeyframesResponse {
+    pub attachment_id: String,
+    #[serde(default)]
+    pub keyframes: Vec<KeyframeItem>,
+}
 
 /// Single structured entry rendered in the live Agent Telemetry Drawer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +72,11 @@ pub fn api_url(path: &str) -> String {
     } else {
         format!("{base}/{path}")
     }
+}
+
+/// Direct media content URL (`GET /api/attachments/{id}`) usable as `src` on `<img>`, `<video>`, `<audio>`.
+pub fn attachment_content_url(id: Uuid) -> String {
+    api_url(&format!("/api/attachments/{id}"))
 }
 
 async fn parse_json_response<T: DeserializeOwned>(
@@ -106,6 +144,24 @@ pub async fn upload_blob_attachment(
         .send()
         .await
         .map_err(|e| format!("Attachment upload failed: {e}"))?;
+    parse_json_response(resp).await
+}
+
+/// `GET /api/attachments/{id}/keyframes` returning extracted timestamped PNG keyframes for video attachments.
+pub async fn fetch_attachment_keyframes(id: Uuid) -> Result<AttachmentKeyframesResponse, String> {
+    let resp = Request::get(&api_url(&format!("/api/attachments/{id}/keyframes")))
+        .send()
+        .await
+        .map_err(|e| format!("Attachment keyframes request failed: {e}"))?;
+    parse_json_response(resp).await
+}
+
+/// `POST /api/presets/real-bug` returning a pinned real GitHub bug preset with its screenshot attachment.
+pub async fn load_real_bug_preset() -> Result<RealBugPresetResponse, String> {
+    let resp = Request::post(&api_url("/api/presets/real-bug"))
+        .send()
+        .await
+        .map_err(|e| format!("Real bug preset request failed: {e}"))?;
     parse_json_response(resp).await
 }
 
@@ -584,5 +640,68 @@ pub fn live_event_to_log(event: &LiveEvent) -> TelemetryLogEntry {
             source: "error".to_string(),
             message: message.clone(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use epicenter_common::MediaKind;
+
+    #[test]
+    fn parses_real_bug_preset_contract() {
+        let raw = r#"{
+            "repo_url": "https://github.com/pallets/click",
+            "commit_sha": "bb695aaecdef95832d167fc1d508921745aa824e",
+            "git_ref": null,
+            "pr_url": "https://github.com/pallets/click/pull/3884",
+            "task_kind": "bug",
+            "title": "Fix show_envvar output for a sequence or an empty envvar (pallets/click#3884)",
+            "problem_statement": "Broken show_envvar formatting",
+            "attachment": {
+                "id": "11111111-2222-3333-4444-555555555555",
+                "filename": "click-3884-envvar-terminal-bug.png",
+                "mime_type": "image/png",
+                "media_kind": "screenshot",
+                "size_bytes": 12345,
+                "file_uri": null
+            }
+        }"#;
+
+        let parsed: RealBugPresetResponse = serde_json::from_str(raw).expect("valid preset JSON");
+        assert_eq!(parsed.repo_url, "https://github.com/pallets/click");
+        assert_eq!(
+            parsed.commit_sha.as_deref(),
+            Some("bb695aaecdef95832d167fc1d508921745aa824e")
+        );
+        assert_eq!(parsed.git_ref, None);
+        assert_eq!(
+            parsed.pr_url.as_deref(),
+            Some("https://github.com/pallets/click/pull/3884")
+        );
+        assert_eq!(parsed.task_kind, TaskKind::Bug);
+        let att = parsed.attachment.expect("attachment present");
+        assert_eq!(att.filename, "click-3884-envvar-terminal-bug.png");
+        assert_eq!(att.media_kind, MediaKind::Screenshot);
+        assert_eq!(att.size_bytes, 12345);
+    }
+
+    #[test]
+    fn parses_attachment_keyframes_contract() {
+        let raw = r#"{
+            "attachment_id": "11111111-2222-3333-4444-555555555555",
+            "keyframes": [
+                { "index": 0, "timestamp_hint": "00:00", "data_url": "data:image/png;base64,iVBORw0KGgo=" },
+                { "index": 1, "timestamp_hint": "00:03", "data_url": "data:image/png;base64,AAAA" }
+            ]
+        }"#;
+
+        let parsed: AttachmentKeyframesResponse =
+            serde_json::from_str(raw).expect("valid keyframes JSON");
+        assert_eq!(parsed.attachment_id, "11111111-2222-3333-4444-555555555555");
+        assert_eq!(parsed.keyframes.len(), 2);
+        assert_eq!(parsed.keyframes[0].index, 0);
+        assert_eq!(parsed.keyframes[0].timestamp_hint, "00:00");
+        assert!(parsed.keyframes[0].data_url.starts_with("data:image/png;base64,"));
     }
 }

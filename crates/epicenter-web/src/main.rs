@@ -2,6 +2,7 @@ pub mod api_client;
 pub mod briefing;
 pub mod capture;
 pub mod eval_view;
+pub mod media_panel;
 pub mod pareto_svg;
 pub mod ripple_svg;
 
@@ -9,6 +10,7 @@ use crate::api_client::{SseSubscription, TelemetryLogEntry};
 use crate::briefing::BriefingAndHandoffDeck;
 use crate::capture::MultimodalIntakeDeck;
 use crate::eval_view::FiveSigmaEvalView;
+use crate::media_panel::MultimodalEvidencePanel;
 use crate::pareto_svg::ParetoAndArenaPanel;
 use crate::ripple_svg::BlastRadiusRippleMap;
 use epicenter_common::{
@@ -105,6 +107,13 @@ pub fn App() -> impl IntoView {
     let show_intake = RwSignal::new(true);
     let show_telemetry = RwSignal::new(true);
     let telemetry_logs = RwSignal::new(Vec::<TelemetryLogEntry>::new());
+    let telemetry_logs_signal: Signal<Vec<TelemetryLogEntry>> = telemetry_logs.into();
+    let has_multimodal_evidence = Memo::new(move |_| {
+        active_session
+            .get()
+            .map(|s| !s.intake.attachments.is_empty() || !s.intake.multimodal_findings.is_empty())
+            .unwrap_or(false)
+    });
     let sse_status = RwSignal::new("IDLE".to_string());
     let loading_session = RwSignal::new(false);
     let session_error = RwSignal::new(Option::<String>::None);
@@ -602,6 +611,11 @@ pub fn App() -> impl IntoView {
                                 </div>
                             })}
 
+                            // Multimodal Evidence & Hydrogen Findings Panel (shown whenever session carries media or findings)
+                            {move || has_multimodal_evidence.get().then(|| view! {
+                                <MultimodalEvidencePanel session=active_session_signal />
+                            })}
+
                             // Split-Screen Analysis Studio: Ripple Map + Pareto/Arena Panel
                             <section class="analysis-split">
                                 <div class="panel viz-host">
@@ -650,6 +664,7 @@ pub fn App() -> impl IntoView {
                                 session=active_session_signal
                                 selected_strategy_id=selected_strategy_id
                                 has_github_token=has_github_token_signal
+                                telemetry_logs=telemetry_logs_signal
                             />
                         </>
                     }.into_any(),
