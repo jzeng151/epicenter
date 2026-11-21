@@ -636,7 +636,7 @@ async fn attachment_bytes_and_keyframes_endpoints_serve_media_and_handle_non_vid
 }
 
 #[tokio::test]
-async fn real_bug_preset_returns_hermes_lyre_56_and_serves_valid_png() {
+async fn real_bug_preset_returns_hermes_lyre_58_and_serves_valid_png() {
     let state = test_state();
     let Json(preset) = create_real_bug_preset(State(state.clone()))
         .await
@@ -645,19 +645,19 @@ async fn real_bug_preset_returns_hermes_lyre_56_and_serves_valid_png() {
     assert_eq!(preset.repo_url, "https://github.com/jzeng151/hermes-lyre");
     assert_eq!(
         preset.commit_sha,
-        "f03ea6ce6a267c2206f82767a682ad1b5962f369"
+        "938d22c8e373d3fe773767dfb0041819e5b0132e"
     );
     assert!(preset.git_ref.is_none());
     assert_eq!(
         preset.pr_url,
-        "https://github.com/jzeng151/hermes-lyre/pull/56"
+        "https://github.com/jzeng151/hermes-lyre/pull/58"
     );
     assert_eq!(preset.task_kind, TaskKind::Bug);
-    assert!(preset.title.contains("jzeng151/hermes-lyre#56"));
-    assert!(preset.problem_statement.contains("format_for_speech"));
+    assert!(preset.title.contains("jzeng151/hermes-lyre#58"));
+    assert!(preset.problem_statement.contains("spans.py"));
     assert_eq!(
         preset.attachment.filename,
-        "hermes-lyre-56-speech-formatter-bug.png"
+        "hermes-lyre-58-quadratic-spans-bug.png"
     );
     assert_eq!(preset.attachment.mime_type, "image/png");
     assert_eq!(preset.attachment.media_kind, MediaKind::Screenshot);
@@ -746,13 +746,13 @@ async fn router_serves_preset_attachment_keyframes_and_media_downloader_fetches_
     );
     assert_eq!(
         preset_json["commit_sha"],
-        "f03ea6ce6a267c2206f82767a682ad1b5962f369"
+        "938d22c8e373d3fe773767dfb0041819e5b0132e"
     );
     assert!(preset_json["git_ref"].is_null());
     assert_eq!(preset_json["task_kind"], "bug");
     assert_eq!(
         preset_json["attachment"]["filename"],
-        "hermes-lyre-56-speech-formatter-bug.png"
+        "hermes-lyre-58-quadratic-spans-bug.png"
     );
     let att_id = preset_json["attachment"]["id"].as_str().unwrap();
 
@@ -1226,4 +1226,46 @@ fn sample_eval_run_with_label(label: &str) -> FiveSigmaEval {
         remaining_failure_modes: Vec::new(),
         created_at: Utc::now(),
     }
+}
+
+#[test]
+fn startup_orphan_cleanup_marks_in_progress_sessions_failed() {
+    let db = DbStore::open_in_memory().unwrap();
+    let req1 = CreateSessionRequest {
+        repo_url: "https://github.com/jzeng151/hermes-lyre".to_string(),
+        git_ref: None,
+        commit_sha: None,
+        task_kind: Some(TaskKind::Bug),
+        title: Some("Analyzing issue...".to_string()),
+        problem_statement: "In-progress session".to_string(),
+        attachment_ids: Vec::new(),
+        attachments: Vec::new(),
+    };
+    let mut in_progress = TournamentEngine::initialize_session(&req1);
+    in_progress.stage = TournamentStage::Intake;
+    db.upsert_session(&in_progress).unwrap();
+
+    let req2 = CreateSessionRequest {
+        repo_url: "https://github.com/jzeng151/hermes-lyre".to_string(),
+        git_ref: None,
+        commit_sha: None,
+        task_kind: Some(TaskKind::Bug),
+        title: Some("Completed session".to_string()),
+        problem_statement: "Done".to_string(),
+        attachment_ids: Vec::new(),
+        attachments: Vec::new(),
+    };
+    let mut completed = TournamentEngine::initialize_session(&req2);
+    completed.stage = TournamentStage::Completed;
+    db.upsert_session(&completed).unwrap();
+
+    let cleaned = db.mark_orphaned_sessions_failed().unwrap();
+    assert_eq!(cleaned, 1);
+
+    let after_in_prog = db.get_session(in_progress.id).unwrap().unwrap();
+    assert_eq!(after_in_prog.stage, TournamentStage::Failed);
+    assert!(after_in_prog.intake.title.contains("server restart"));
+
+    let after_done = db.get_session(completed.id).unwrap().unwrap();
+    assert_eq!(after_done.stage, TournamentStage::Completed);
 }

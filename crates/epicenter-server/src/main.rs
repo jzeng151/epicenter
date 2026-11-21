@@ -30,6 +30,13 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("epicenter.db"));
     let db = DbStore::open(&db_path)?;
+    let orphaned = db.mark_orphaned_sessions_failed()?;
+    if orphaned > 0 {
+        info!(
+            orphaned,
+            "marked interrupted in-progress sessions from prior server run as failed"
+        );
+    }
     let state = AppState::from_env(db);
 
     let port: u16 = std::env::var("EPICENTER_PORT")
