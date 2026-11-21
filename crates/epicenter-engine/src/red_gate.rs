@@ -99,7 +99,15 @@ async fn run_bug_red_gate(
     event_tx: &Option<broadcast::Sender<LiveEvent>>,
 ) -> anyhow::Result<RedGateSpec> {
     let multimodal_block = format_multimodal_findings(&session.intake.multimodal_findings);
-    let source_context = repo.prompt_source_context(&session.intake.suspect_files, 32_000);
+    let focus_text = format!(
+        "{}\n{}\n{}\n{}",
+        session.intake.title,
+        session.intake.problem_statement,
+        session.intake.repro_steps.join("\n"),
+        multimodal_block
+    );
+    let source_context =
+        repo.prompt_focused_source_context(&session.intake.suspect_files, &focus_text, 36_000);
     let test_examples = repo.prompt_test_examples(&session.intake.suspect_files, 8_000);
     let suggested_path = suggested_repro_path(prepared.runtime, &repo.file_tree);
     let default_cmd = prepared.default_test_command(Some(&suggested_path));
@@ -420,17 +428,14 @@ async fn run_feature_red_gate(
 
 /// Adaptive reasoning depth for Stage 2 Bug Red-Gate:
 /// - Attempt 1 (`Neon 1/2`): `"low"` thinking for fast first-pass repro authoring.
-/// - Attempt 2 (`Neon 2/2`) & Attempt 3 (`Carbon` escalation): `None` (default deeper thinking)
-///   so harder bugs automatically escalate reasoning depth.
+/// - Attempt 2 (`Neon 2/2`) & Attempt 3 (`Carbon` escalation): `"medium"` thinking so harder
+///   bugs escalate reasoning depth cleanly without hitting 90s+ default-high stalls.
 pub(crate) fn bug_red_gate_generation_config(attempt_num: u8) -> Option<GenerationConfig> {
-    if attempt_num == 1 {
-        Some(GenerationConfig {
-            thinking_level: Some("low".to_string()),
-            ..Default::default()
-        })
-    } else {
-        None
-    }
+    let level = if attempt_num == 1 { "low" } else { "medium" };
+    Some(GenerationConfig {
+        thinking_level: Some(level.to_string()),
+        ..Default::default()
+    })
 }
 
 fn suggested_repro_path(runtime: RepoRuntime, file_tree: &[String]) -> String {
