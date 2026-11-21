@@ -1,98 +1,77 @@
-# Epicenter 5-Sigma 3-Way Evaluation Report
+# Epicenter 5-Sigma 3-Way Evaluation Status Report
 
-## Run Metadata
+> **Status: Awaiting Live Host-Verified 3-Way Evaluation Run**
+>
+> The prior fabricated offline dry-run baseline (`eval_runs/latest_five_sigma.json`, label `offline-dry-run-baseline-seed`) and all synthetic evaluation/grading/calibration code paths (`synthesize_dry_run_submission`, `grade_offline_deterministic`, `compute_structural_blast_from_diff`, `default_calibration_findings`, `--seed-dry-run`) have been **permanently purged**.
+>
+> No synthetic outcomes, diffs, speedups, blast-risk scores, or calibration claims exist in this repository. Future `eval_runs/latest_five_sigma.json` and scorecard tables will be populated exclusively from live Gemini 4 API executions graded independently via `GradingMode::HostSandbox` (`git apply` + real OS test exit codes + real checked-out repository `RepoCallGraph` blast-radius analysis).
 
-| Field | Value |
+## Verified Real GitHub Dataset (`eval_runs/five_sigma_20_cases.json`)
+
+Every case in `eval_runs/five_sigma_20_cases.json` was harvested directly from merged GitHub bug-fix pull requests and audited with `epicenter-eval verify --dataset eval_runs/five_sigma_20_cases.json --check-github`:
+
+| Metric | Value |
 | --- | --- |
-| Run ID | `870c6988-1876-4e83-a3cc-78a051820e23` |
-| Run Label | `offline-dry-run-baseline-seed` |
-| Execution Mode | Offline Dry-Run Baseline Seed (`epicenter-graph` structural validator; ready to overwrite via live API run) |
-| Created At (UTC) | `2026-11-21T18:37:20.369948+00:00` |
-| Dataset Breakdown | 20 total (5 Calibration, 15 Locked Unseen, 12 Multimodal) |
+| Total Verified Real PR Cases | **20 / 20 PASS** (live GitHub API commit + merged PR + HTTP-200 media check) |
+| Split Discipline | **5 Calibration** + **15 Locked Unseen** |
+| Language Breakdown | **15 Python** (9 OSS repos) + **5 TypeScript** (2 OSS repos) |
+| Verified Multimodal Cases | **6 cases** (3 Calibration, 3 Locked Unseen) with **15 HTTP-200 verified image/attachment URLs** |
+| Hidden Ground-Truth Isolation | 100% of `ground_truth_test_patch` hunks modify test files only; strictly withheld from all 3 arms |
 
-## 3-Way Scorecards
+### 20 Real Verified GitHub Pull Requests
 
-### All Cases (20)
+| Case ID | Repository | Real Merged PR | Real Base Commit | Split | Verified Media |
+| --- | --- | --- | --- | --- | ---: |
+| `cal-pydantic-12147` | [pydantic/pydantic](https://github.com/pydantic/pydantic) | [#12147](https://github.com/pydantic/pydantic/pull/12147) | `b5cbc5d6` | `calibration` | 9 |
+| `cal-hono-4754` | [honojs/hono](https://github.com/honojs/hono) | [#4754](https://github.com/honojs/hono/pull/4754) | `2de30d7c` | `calibration` | 1 |
+| `cal-click-3902` | [pallets/click](https://github.com/pallets/click) | [#3902](https://github.com/pallets/click/pull/3902) | `8abb77a8` | `calibration` | 1 |
+| `cal-flask-6133` | [pallets/flask](https://github.com/pallets/flask) | [#6133](https://github.com/pallets/flask/pull/6133) | `3596b1ab` | `calibration` | 0 |
+| `cal-werkzeug-3327` | [pallets/werkzeug](https://github.com/pallets/werkzeug) | [#3327](https://github.com/pallets/werkzeug/pull/3327) | `0819a2a9` | `calibration` | 0 |
+| `unseen-hono-4521` | [honojs/hono](https://github.com/honojs/hono) | [#4521](https://github.com/honojs/hono/pull/4521) | `4960c063` | `locked_unseen` | 1 |
+| `unseen-hono-5166` | [honojs/hono](https://github.com/honojs/hono) | [#5166](https://github.com/honojs/hono/pull/5166) | `26d8e42b` | `locked_unseen` | 2 |
+| `unseen-pydantic-13326` | [pydantic/pydantic](https://github.com/pydantic/pydantic) | [#13326](https://github.com/pydantic/pydantic/pull/13326) | `74a0d3a7` | `locked_unseen` | 1 |
+| `unseen-requests-7502` | [psf/requests](https://github.com/psf/requests) | [#7502](https://github.com/psf/requests/pull/7502) | `661970d1` | `locked_unseen` | 0 |
+| `unseen-urllib3-5347` | [urllib3/urllib3](https://github.com/urllib3/urllib3) | [#5347](https://github.com/urllib3/urllib3/pull/5347) | `5feb9934` | `locked_unseen` | 0 |
+| `unseen-fastapi-16739` | [tiangolo/fastapi](https://github.com/tiangolo/fastapi) | [#16739](https://github.com/tiangolo/fastapi/pull/16739) | `70301919` | `locked_unseen` | 0 |
+| `unseen-zod-6764` | [colinhacks/zod](https://github.com/colinhacks/zod) | [#6764](https://github.com/colinhacks/zod/pull/6764) | `00f532f1` | `locked_unseen` | 0 |
+| `unseen-rich-4079` | [Textualize/rich](https://github.com/Textualize/rich) | [#4079](https://github.com/Textualize/rich/pull/4079) | `19c67b9a` | `locked_unseen` | 0 |
+| `unseen-pytest-15409` | [pytest-dev/pytest](https://github.com/pytest-dev/pytest) | [#15409](https://github.com/pytest-dev/pytest/pull/15409) | `36eed6b7` | `locked_unseen` | 0 |
+| `unseen-click-3884` | [pallets/click](https://github.com/pallets/click) | [#3884](https://github.com/pallets/click/pull/3884) | `bb695aae` | `locked_unseen` | 0 |
+| `unseen-flask-6096` | [pallets/flask](https://github.com/pallets/flask) | [#6096](https://github.com/pallets/flask/pull/6096) | `514fc6b3` | `locked_unseen` | 0 |
+| `unseen-werkzeug-3325` | [pallets/werkzeug](https://github.com/pallets/werkzeug) | [#3325](https://github.com/pallets/werkzeug/pull/3325) | `15fc22b6` | `locked_unseen` | 0 |
+| `unseen-urllib3-5315` | [urllib3/urllib3](https://github.com/urllib3/urllib3) | [#5315](https://github.com/urllib3/urllib3/pull/5315) | `c5347bbd` | `locked_unseen` | 0 |
+| `unseen-fastapi-16734` | [tiangolo/fastapi](https://github.com/tiangolo/fastapi) | [#16734](https://github.com/tiangolo/fastapi/pull/16734) | `e1144f69` | `locked_unseen` | 0 |
+| `unseen-zod-6763` | [colinhacks/zod](https://github.com/colinhacks/zod) | [#6763](https://github.com/colinhacks/zod/pull/6763) | `00f532f1` | `locked_unseen` | 0 |
 
-| Evaluation Arm | Resolved | Regression-Free | Median Speedup | Mean Blast Risk (lower=safer) | Mean Root-Cause Depth | Median Duration |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Arm 1: Single Model Call | 6/20 (30.0%) | 95.0% | +1.5% | 62.0 | 45.8 | 5132 ms |
-| Arm 2: Single Managed Agent | 11/20 (55.0%) | 95.0% | +5.2% | 43.0 | 63.9 | 29322 ms |
-| Arm 3: Epicenter Tournament | 18/20 (90.0%) | 95.0% | +17.9% | 27.6 | 93.5 | 58942 ms |
+## How to Verify and Execute the Live Host-Verified 3-Way Evaluation
 
-### Locked Unseen Split (15)
+1. **Audit dataset integrity against live GitHub REST API & media URLs:**
 
-| Evaluation Arm | Resolved | Regression-Free | Median Speedup | Mean Blast Risk (lower=safer) | Mean Root-Cause Depth | Median Duration |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Arm 1: Single Model Call | 4/15 (26.7%) | 93.3% | +2.5% | 62.0 | 45.1 | 5159 ms |
-| Arm 2: Single Managed Agent | 7/15 (46.7%) | 93.3% | +4.2% | 43.0 | 64.5 | 28478 ms |
-| Arm 3: Epicenter Tournament | 13/15 (86.7%) | 93.3% | +17.2% | 27.8 | 92.4 | 54978 ms |
+```bash
+cargo run -p epicenter-eval -- verify \
+  --dataset eval_runs/five_sigma_20_cases.json \
+  --check-github
+```
 
-### Calibration Split (5)
+2. **Preview the validated live run matrix without writing synthetic results:**
 
-| Evaluation Arm | Resolved | Regression-Free | Median Speedup | Mean Blast Risk (lower=safer) | Mean Root-Cause Depth | Median Duration |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Arm 1: Single Model Call | 2/5 (40.0%) | 100.0% | +0.5% | 62.0 | 48.0 | 4603 ms |
-| Arm 2: Single Managed Agent | 4/5 (80.0%) | 100.0% | +6.9% | 43.0 | 62.2 | 31503 ms |
-| Arm 3: Epicenter Tournament | 5/5 (100.0%) | 100.0% | +19.3% | 27.0 | 97.0 | 61862 ms |
+```bash
+cargo run -p epicenter-eval -- run \
+  --dataset eval_runs/five_sigma_20_cases.json \
+  --split all \
+  --dry-run
+```
 
-### Multimodal-Only Subset (12)
+3. **Execute the live 3-way evaluation (Arm 1: Single Model Call, Arm 2: Single Managed Agent, Arm 3: Epicenter Tournament with real downloaded media attachments) with Independent Host Sandbox Grading (`HostSandbox`):**
 
-| Evaluation Arm | Resolved | Regression-Free | Median Speedup | Mean Blast Risk (lower=safer) | Mean Root-Cause Depth | Median Duration |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Arm 1: Single Model Call | 0/12 (0.0%) | 100.0% | n/a | 62.0 | 48.0 | 5132 ms |
-| Arm 2: Single Managed Agent | 3/12 (25.0%) | 100.0% | +2.5% | 43.0 | 60.5 | 28772 ms |
-| Arm 3: Epicenter Tournament | 10/12 (83.3%) | 100.0% | +14.4% | 27.7 | 91.9 | 59735 ms |
+```bash
+GEMINI_API_KEY=... GITHUB_TOKEN=... cargo run --release -p epicenter-eval -- run \
+  --dataset eval_runs/five_sigma_20_cases.json \
+  --split all \
+  --grading-mode host-sandbox \
+  --concurrency 3 \
+  --output-json eval_runs/latest_five_sigma.json \
+  --output-md eval_runs/FIVE_SIGMA_REPORT.md
+```
 
-## Key Delta Highlights (Locked Unseen Split)
-
-- **Resolve Rate Gain**: Epicenter Tournament achieves **86.7%** vs **46.7%** Single Managed Agent (**+40.0 pp**) and **26.7%** Single Model Call (**+60.0 pp**).
-- **Blast-Radius Reduction**: Mean composite blast risk drops from **43.0** (Arm 2) to **27.8** (Arm 3, **-15.2** pts).
-- **Root-Cause Cure Depth**: Mean root-cause depth improves from **64.5** (Arm 2) to **92.4** (Arm 3, **+27.9** pts).
-- **Multimodal Advantage**: On screenshot/trace-bearing issues, Epicenter resolves **83.3%** vs **25.0%** Single Managed Agent (**+58.3 pp**).
-
-## Calibration Findings (5-Issue Iteration Log)
-
-| Failure Mode | Observed Case | System Change Made | Impact Summary |
-| --- | --- | --- | --- |
-| Worker modified Red-Gate repro assertions to make tests pass | `cal-httpx-3112` | Locked Red-Gate test path (`RedGateSpec::locked_test_path`) with post-run diff rejection (`test_tampering_violation`) and read-only contract enforcement | Eliminated false-positive green runs across all 15 locked unseen cases (0 tampering violations) |
-| Fast Neon worker failed to reproduce async streaming teardown bug on HEAD | `cal-fastapi-11205` | Added automatic `Neon` -> `Carbon` Red-Gate escalation (`RedGateResolution::EscalatedCarbon`) with Characterization fallback | Raised verified Red-Gate reproduction rate from 60% to 95% on async & concurrency issues |
-| Single-metric Arena favored shallow try/except bandaid over root-cause invariant fix | `cal-pydantic-9481` | Introduced Dual-Score utility (`0.45 * root_cause_depth + 0.40 * (100 - blast_risk) + 0.15 * speedup`) and Carbon `bandaid_debt_warning` penalties | Increased mean Root-Cause Depth by +18.4 pts while cutting dark-zone caller regressions by 62% |
-| Text-only planner ignored HTTP header leak & schema inspector screenshots | `cal-httpx-3112 / cal-pydantic-9481` | Mandatory Stage 1 `gemini-4-hydrogen` multimodal intake pass extracting symbols and error invariants before Stage 3 strategy synthesis | Lifted multimodal subset resolve rate from 50% (Arm 2) to 80%+ (Arm 3 Epicenter Tournament) |
-
-## Honest Remaining Failure Modes
-
-- Arm 3: Epicenter Tournament — `incomplete_edge_case_fix` (2 cases)
-- Arm 3: Epicenter Tournament — `regression_in_caller_dark_zone` (1 case)
-- Arm 2: Single Managed Agent — `bandaid_symptom_masking` (3 cases)
-- Arm 2: Single Managed Agent — `multimodal_context_missed` (6 cases)
-- Arm 2: Single Managed Agent — `regression_in_caller_dark_zone` (1 case)
-- Arm 1: Single Model Call — `bandaid_symptom_masking` (2 cases)
-- Arm 1: Single Model Call — `multimodal_context_missed` (12 cases)
-- Arm 1: Single Model Call — `regression_in_caller_dark_zone` (1 case)
-
-## Per-Case Outcome Matrix
-
-| Case ID | Split | Media | Arm 1: Single Model | Arm 2: Single Agent | Arm 3: Epicenter Tournament |
-| --- | --- | :---: | --- | --- | --- |
-| `cal-httpx-3112` | calibration | yes | FAIL: `multimodal_context_missed` (risk 62) | PASS (risk 43) | PASS (risk 27) |
-| `cal-pydantic-9481` | calibration | yes | FAIL: `multimodal_context_missed` (risk 62) | PASS (risk 43) | PASS (risk 27) |
-| `cal-fastapi-11205` | calibration | yes | FAIL: `multimodal_context_missed` (risk 62) | FAIL: `bandaid_symptom_masking` (risk 43) | PASS (risk 27) |
-| `cal-zod-3420` | calibration | no | PASS (risk 62) | PASS (risk 43) | PASS (risk 27) |
-| `cal-hono-2914` | calibration | no | PASS (risk 62) | PASS (risk 43) | PASS (risk 27) |
-| `unseen-httpx-3240` | unseen | yes | FAIL: `multimodal_context_missed` (risk 62) | FAIL: `multimodal_context_missed` (risk 43) | PASS (risk 27) |
-| `unseen-httpx-3288` | unseen | no | FAIL: `bandaid_symptom_masking` (risk 62) | PASS (risk 43) | PASS (risk 27) |
-| `unseen-pydantic-9812` | unseen | yes | FAIL: `multimodal_context_missed` (risk 62) | FAIL: `multimodal_context_missed` (risk 43) | FAIL: `incomplete_edge_case_fix` (risk 31) |
-| `unseen-pydantic-9940` | unseen | no | FAIL: `regression_in_caller_dark_zone` (risk 62) | PASS (risk 43) | PASS (risk 27) |
-| `unseen-fastapi-11402` | unseen | yes | FAIL: `multimodal_context_missed` (risk 62) | FAIL: `multimodal_context_missed` (risk 43) | PASS (risk 27) |
-| `unseen-zod-3519` | unseen | yes | FAIL: `multimodal_context_missed` (risk 62) | FAIL: `multimodal_context_missed` (risk 43) | PASS (risk 27) |
-| `unseen-zod-3604` | unseen | no | PASS (risk 62) | PASS (risk 43) | PASS (risk 27) |
-| `unseen-hono-3011` | unseen | yes | FAIL: `multimodal_context_missed` (risk 62) | FAIL: `multimodal_context_missed` (risk 43) | PASS (risk 27) |
-| `unseen-hono-3129` | unseen | no | FAIL: `bandaid_symptom_masking` (risk 62) | PASS (risk 43) | PASS (risk 27) |
-| `unseen-requests-6612` | unseen | yes | FAIL: `multimodal_context_missed` (risk 62) | PASS (risk 43) | PASS (risk 27) |
-| `unseen-click-2685` | unseen | yes | FAIL: `multimodal_context_missed` (risk 62) | FAIL: `multimodal_context_missed` (risk 43) | PASS (risk 27) |
-| `unseen-click-2741` | unseen | no | PASS (risk 62) | PASS (risk 43) | PASS (risk 27) |
-| `unseen-fastapi-11710` | unseen | no | PASS (risk 62) | FAIL: `regression_in_caller_dark_zone` (risk 43) | FAIL: `regression_in_caller_dark_zone` (risk 31) |
-| `unseen-zod-3702` | unseen | yes | FAIL: `multimodal_context_missed` (risk 62) | FAIL: `bandaid_symptom_masking` (risk 43) | PASS (risk 27) |
-| `unseen-requests-6801` | unseen | yes | FAIL: `multimodal_context_missed` (risk 62) | FAIL: `bandaid_symptom_masking` (risk 43) | FAIL: `incomplete_edge_case_fix` (risk 31) |
-
+Optional: pass genuinely observed calibration iteration notes via `--calibration-findings <path/to/findings.json>`.
