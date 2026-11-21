@@ -1,7 +1,7 @@
-use crate::api_client;
+use crate::api_client::{self, TelemetryLogEntry};
 use epicenter_common::{
-    CandidateBadge, CandidateResult, CreatePrRequest, CreatePrResponse, DialogueSpeaker,
-    RedGateResolution, RedGateSpec, StrategyDepthTier, TournamentSession,
+    CandidateBadge, CandidateResult, CreatePrRequest, CreatePrResponse, DialogueSpeaker, LogLevel,
+    RedGateResolution, RedGateSpec, StrategyDepthTier, TournamentSession, TournamentStage,
 };
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
@@ -139,6 +139,7 @@ pub fn BriefingAndHandoffDeck(
     session: Signal<Option<TournamentSession>>,
     selected_strategy_id: RwSignal<Option<String>>,
     has_github_token: Signal<bool>,
+    #[prop(optional)] telemetry_logs: Option<Signal<Vec<TelemetryLogEntry>>>,
 ) -> impl IntoView {
     let action_busy = RwSignal::new(Option::<String>::None);
     let action_notice = RwSignal::new(Option::<String>::None);
@@ -302,6 +303,7 @@ pub fn BriefingAndHandoffDeck(
                         </div>
                     }.into_any(),
                     Some(sess) => {
+                        let is_failed = sess.stage == TournamentStage::Failed;
                         let sel_id = selected_strategy_id.get();
                         let active_cand = resolve_active_candidate(&sess, sel_id.as_deref()).cloned();
                         let active_spec = active_cand.as_ref().and_then(|c| {
@@ -322,7 +324,102 @@ pub fn BriefingAndHandoffDeck(
                             .map(|c| c.strategy_id.clone())
                             .unwrap_or_default();
 
+                        let failed_red_gate_excerpt = match &sess.red_gate {
+                            Some(RedGateSpec::Bug(bug)) if !bug.failure_excerpt.trim().is_empty() => {
+                                Some(format!(
+                                    "Red-Gate command: $ {}\nVerified fails on HEAD: {}\n\n{}",
+                                    bug.test_command,
+                                    bug.verified_fails_on_head,
+                                    bug.failure_excerpt.trim()
+                                ))
+                            }
+                            _ => None,
+                        };
+                        let failed_candidate_excerpt = sess
+                            .candidates
+                            .iter()
+                            .find(|c| !c.test_output_tail.trim().is_empty())
+                            .map(|c| {
+                                format!(
+                                    "Candidate `{}` output tail:\n{}",
+                                    c.strategy_id,
+                                    c.test_output_tail.trim()
+                                )
+                            });
+                        let failed_telemetry_excerpt = if is_failed {
+                            telemetry_logs.and_then(|sig| {
+                                let lines: Vec<String> = sig
+                                    .get()
+                                    .into_iter()
+                                    .filter(|e| {
+                                        matches!(e.level, LogLevel::Error | LogLevel::Warn)
+                                            || e.source.contains("failed")
+                                            || e.source.contains("red-gate")
+                                    })
+                                    .rev()
+                                    .take(8)
+                                    .collect::<Vec<_>>()
+                                    .into_iter()
+                                    .rev()
+                                    .map(|e| {
+                                        format!(
+                                            "[{}] [{}] {}",
+                                            e.timestamp.format("%H:%M:%S"),
+                                            e.source,
+                                            e.message
+                                        )
+                                    })
+                                    .collect();
+                                (!lines.is_empty()).then(|| lines.join("\n"))
+                            })
+                        } else {
+                            None
+                        };
+
+                        let diagnostic_excerpt = if is_failed {
+                            let mut parts = Vec::new();
+                            if let Some(t) = failed_telemetry_excerpt {
+                                parts.push(t);
+                            }
+                            if let Some(rg) = failed_red_gate_excerpt {
+                                parts.push(rg);
+                            }
+                            if let Some(c) = failed_candidate_excerpt {
+                                parts.push(c);
+                            }
+                            (!parts.is_empty()).then(|| parts.join("\n\n---\n\n"))
+                        } else {
+                            None
+                        };
+
                         view! {
+                            {is_failed.then(|| view! {
+                                <div class="honest-halt-banner" role="alert">
+                                    <div class="honest-halt-head">
+                                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                            <span class="badge badge-red">"HONEST HALT · STAGE FAILED"</span>
+                                            <strong class="honest-halt-title">
+                                                "Tournament Stopped Without Synthetic Fallback"
+                                            </strong>
+                                        </div>
+                                        <span class="mono" style="font-size:11px;color:#fca5a5;">
+                                            "Zero fabricated patches · Zero simulated passes"
+                                        </span>
+                                    </div>
+                                    <p class="honest-halt-body">
+                                        "Epicenter halted this session honestly because a real verification gate failed (for example, the reported bug could not be independently reproduced as a failing test on unmodified HEAD, or the host verifier / Gemini API could not validate any passing candidate). Rather than falling back to synthetic diffs or fabricating passing scores, execution stopped cleanly with full diagnostic telemetry below."
+                                    </p>
+                                    {diagnostic_excerpt.map(|excerpt| view! {
+                                        <div style="margin-top:8px;">
+                                            <span class="field-label" style="color:#fca5a5;">
+                                                "Captured Failure Excerpt & Telemetry"
+                                            </span>
+                                            <pre class="terminal-box" style="border-color:rgba(239,68,68,0.45);">{excerpt}</pre>
+                                        </div>
+                                    })}
+                                </div>
+                            })}
+
                             <div class="briefing-grid">
                                 // Left Column: 2-Speaker War-Room TTS Audio + Transcript
                                 <div>
@@ -337,7 +434,11 @@ pub fn BriefingAndHandoffDeck(
                                             }.into_any(),
                                             None => view! {
                                                 <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">
-                                                    "Synthesizing 2-speaker WAV briefing at Stage 7 completion..."
+                                                    {if is_failed {
+                                                        "War-room audio briefing skipped — tournament halted prior to Stage 7."
+                                                    } else {
+                                                        "Synthesizing 2-speaker WAV briefing at Stage 7 completion..."
+                                                    }}
                                                 </div>
                                             }.into_any(),
                                         }}
@@ -353,7 +454,11 @@ pub fn BriefingAndHandoffDeck(
                                     {if script.is_empty() {
                                         view! {
                                             <div class="empty-state" style="padding:20px 14px;">
-                                                "2-speaker Architect vs. Auditor script will stream in once Stage 6/7 finishes."
+                                                {if is_failed {
+                                                    "No war-room dialogue generated — session halted before Stage 7."
+                                                } else {
+                                                    "2-speaker Architect vs. Auditor script will stream in once Stage 6/7 finishes."
+                                                }}
                                             </div>
                                         }.into_any()
                                     } else {
@@ -459,7 +564,11 @@ pub fn BriefingAndHandoffDeck(
                                     {match active_cand {
                                         None => view! {
                                             <div class="empty-state">
-                                                "Waiting for Gemini 4 Neon workers to produce candidate patches..."
+                                                {if is_failed {
+                                                    "No candidate patches produced — tournament halted cleanly at verification gate."
+                                                } else {
+                                                    "Waiting for Gemini 4 Neon workers to produce candidate patches..."
+                                                }}
                                             </div>
                                         }.into_any(),
                                         Some(cand) => {
