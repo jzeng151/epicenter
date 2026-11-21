@@ -1,9 +1,10 @@
 use crate::db::infer_media_kind;
 use crate::live_judge::run_live_judge_pr;
+use crate::media::{base64_encode, render_click_3884_terminal_png, TempDirGuard};
 use crate::state::{apply_event_to_session, AppState};
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, State},
-    http::{header, StatusCode},
+    http::{header, HeaderValue, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -15,14 +16,16 @@ use chrono::Utc;
 use epicenter_common::{
     AttachmentMeta, CreatePrRequest, CreatePrResponse, CreateSessionRequest, CreateSessionResponse,
     ExportBundleResponse, FiveSigmaEval, LiveEvent, LiveJudgePrRequest, LiveJudgePrResponse,
-    ServerStatusResponse, SessionListItem, TournamentSession, TournamentStage,
+    MediaKind, ServerStatusResponse, SessionListItem, TaskKind, TournamentSession, TournamentStage,
 };
 use epicenter_engine::{EngineRunOptions, TournamentEngine, UploadedAttachmentBytes};
 use futures::stream::{self, Stream};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::convert::Infallible;
-use std::path::PathBuf;
+use std::path::{Path as StdPath, PathBuf};
 use std::time::Duration;
+use tokio::process::Command;
 use tokio::sync::{broadcast, oneshot};
 use tower_http::{
     cors::CorsLayer,
@@ -107,6 +110,12 @@ pub fn build_router_with_dist(state: AppState, dist_dir: PathBuf) -> Router {
     Router::new()
         .route("/api/health", get(health_handler))
         .merge(upload_route)
+        .route("/api/attachments/{id}", get(get_attachment_bytes))
+        .route(
+            "/api/attachments/{id}/keyframes",
+            get(get_attachment_keyframes),
+        )
+        .route("/api/presets/real-bug", post(create_real_bug_preset))
         .route("/api/sessions", post(create_session).get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
         .route("/api/sessions/{id}/events", get(session_events_sse))
@@ -190,6 +199,267 @@ pub async fn upload_attachment(
     Err(ApiError::bad_request(
         "multipart request must include at least one file field",
     ))
+}
+
+/// Single extracted video keyframe thumbnail encoded as a PNG data URL.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentKeyframe {
+    pub index: usize,
+    pub timestamp_hint: String,
+    pub data_url: String,
+}
+
+/// Response payload for `GET /api/attachments/{id}/keyframes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentKeyframesResponse {
+    pub attachment_id: Uuid,
+    pub keyframes: Vec<AttachmentKeyframe>,
+}
+
+/// Response payload for `POST /api/presets/real-bug`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RealBugPresetResponse {
+    pub repo_url: String,
+    pub commit_sha: String,
+    pub git_ref: Option<String>,
+    pub pr_url: String,
+    pub task_kind: TaskKind,
+    pub title: String,
+    pub problem_statement: String,
+    pub attachment: AttachmentMeta,
+}
+
+/// `GET /api/attachments/{id}` — serves raw uploaded attachment bytes with original `Content-Type`.
+pub async fn get_attachment_bytes(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let (meta, bytes) = state
+        .db
+        .get_attachment(id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found(format!("attachment '{id}' not found")))?;
+
+    let content_type = HeaderValue::from_str(&meta.mime_type)
+        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=3600"),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+/// `GET /api/attachments/{id}/keyframes` — extracts up to 4 PNG keyframes from uploaded videos via `ffmpeg`.
+/// For non-video attachments or when `ffmpeg` fails/is unavailable, gracefully returns an empty `keyframes` list.
+pub async fn get_attachment_keyframes(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<AttachmentKeyframesResponse>, ApiError> {
+    let (meta, bytes) = state
+        .db
+        .get_attachment(id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found(format!("attachment '{id}' not found")))?;
+
+    let is_video = meta.media_kind == MediaKind::ScreenRecording
+        || meta
+            .mime_type
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with("video/");
+
+    if !is_video || bytes.is_empty() {
+        return Ok(Json(AttachmentKeyframesResponse {
+            attachment_id: id,
+            keyframes: Vec::new(),
+        }));
+    }
+
+    let keyframes = extract_video_keyframes(&meta, &bytes).await;
+    Ok(Json(AttachmentKeyframesResponse {
+        attachment_id: id,
+        keyframes,
+    }))
+}
+
+async fn extract_video_keyframes(meta: &AttachmentMeta, bytes: &[u8]) -> Vec<AttachmentKeyframe> {
+    let Ok(temp_dir) = TempDirGuard::new("keyframes") else {
+        warn!(attachment_id = %meta.id, "failed to create temp dir for keyframe extraction");
+        return Vec::new();
+    };
+
+    let ext = StdPath::new(&meta.filename)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .filter(|s| matches!(s.as_str(), "mp4" | "webm" | "mov" | "mkv" | "avi" | "m4v"))
+        .unwrap_or_else(|| {
+            let mime = meta.mime_type.to_ascii_lowercase();
+            if mime.contains("webm") {
+                "webm".to_string()
+            } else if mime.contains("quicktime") {
+                "mov".to_string()
+            } else {
+                "mp4".to_string()
+            }
+        });
+
+    let input_path = temp_dir.path().join(format!("input.{ext}"));
+    if let Err(err) = tokio::fs::write(&input_path, bytes).await {
+        warn!(attachment_id = %meta.id, %err, "failed to write video bytes for ffmpeg");
+        return Vec::new();
+    }
+
+    let ffmpeg_bin = if StdPath::new("/opt/homebrew/bin/ffmpeg").exists() {
+        "/opt/homebrew/bin/ffmpeg"
+    } else {
+        "ffmpeg"
+    };
+
+    let output_pattern = temp_dir.path().join("frame_%02d.png");
+
+    // Primary extraction: 1 frame every 2 seconds, capped at 480px width and 4 frames.
+    let primary_ok = run_ffmpeg_extract(
+        ffmpeg_bin,
+        &input_path,
+        &output_pattern,
+        &[
+            "-vf",
+            "fps=1/2,scale='min(480,iw)':-1",
+            "-frames:v",
+            "4",
+        ],
+    )
+    .await;
+
+    let mut frame_paths = collect_extracted_frames(temp_dir.path());
+    let mut step_secs = 2usize;
+
+    // Fallback for very short clips (< 2s) or streams where fps filter produces 0 frames.
+    if !primary_ok || frame_paths.is_empty() {
+        for p in &frame_paths {
+            let _ = std::fs::remove_file(p);
+        }
+        let fallback_ok = run_ffmpeg_extract(
+            ffmpeg_bin,
+            &input_path,
+            &output_pattern,
+            &["-vf", "scale='min(480,iw)':-1", "-vframes", "4"],
+        )
+        .await;
+        if fallback_ok {
+            frame_paths = collect_extracted_frames(temp_dir.path());
+            step_secs = 1;
+        } else {
+            return Vec::new();
+        }
+    }
+
+    let mut keyframes = Vec::new();
+    for (index, frame_path) in frame_paths.into_iter().take(4).enumerate() {
+        if let Ok(png_bytes) = std::fs::read(&frame_path) {
+            if png_bytes.is_empty() {
+                continue;
+            }
+            let secs = index * step_secs;
+            let timestamp_hint = format!("{:02}:{:02}", secs / 60, secs % 60);
+            let data_url = format!("data:image/png;base64,{}", base64_encode(&png_bytes));
+            keyframes.push(AttachmentKeyframe {
+                index,
+                timestamp_hint,
+                data_url,
+            });
+        }
+    }
+
+    keyframes
+}
+
+async fn run_ffmpeg_extract(
+    ffmpeg_bin: &str,
+    input_path: &StdPath,
+    output_pattern: &StdPath,
+    extra_args: &[&str],
+) -> bool {
+    let mut cmd = Command::new(ffmpeg_bin);
+    cmd.arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(input_path)
+        .args(extra_args)
+        .arg(output_pattern)
+        .kill_on_drop(true);
+
+    match tokio::time::timeout(Duration::from_secs(10), cmd.output()).await {
+        Ok(Ok(out)) => out.status.success(),
+        Ok(Err(err)) => {
+            warn!(%err, "failed to invoke ffmpeg for keyframe extraction");
+            false
+        }
+        Err(_) => {
+            warn!("ffmpeg keyframe extraction timed out after 10s");
+            false
+        }
+    }
+}
+
+fn collect_extracted_frames(dir: &StdPath) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|name| name.starts_with("frame_") && name.ends_with(".png"))
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// `POST /api/presets/real-bug` — provisions a verified real merged GitHub bug-fix PR preset
+/// (`pallets/click#3884`) pinned to its exact parent commit along with a stored terminal PNG capture.
+pub async fn create_real_bug_preset(
+    State(state): State<AppState>,
+) -> Result<Json<RealBugPresetResponse>, ApiError> {
+    let png_bytes = render_click_3884_terminal_png();
+    let attachment = AttachmentMeta {
+        id: Uuid::new_v4(),
+        filename: "click-3884-envvar-terminal-bug.png".to_string(),
+        mime_type: "image/png".to_string(),
+        media_kind: MediaKind::Screenshot,
+        size_bytes: png_bytes.len() as u64,
+        file_uri: None,
+    };
+
+    state
+        .db
+        .insert_attachment(&attachment, &png_bytes)
+        .map_err(ApiError::internal)?;
+
+    Ok(Json(RealBugPresetResponse {
+        repo_url: "https://github.com/pallets/click".to_string(),
+        commit_sha: "bb695aaecdef95832d167fc1d508921745aa824e".to_string(),
+        git_ref: None,
+        pr_url: "https://github.com/pallets/click/pull/3884".to_string(),
+        task_kind: TaskKind::Bug,
+        title: "Fix show_envvar output for a sequence or an empty envvar (pallets/click#3884)"
+            .to_string(),
+        problem_statement: "In pallets/click (pinned at parent commit bb695aaecdef95832d167fc1d508921745aa824e, before merged PR #3884), click.Option(show_envvar=True) renders broken terminal hints and --help output for sequence or empty envvar values: envvar='' renders '(env var: '')' in error hints and '[env var: ]' in help text; envvar=[] renders '(env var: '[]')' in error hints and '[env var: ]' in help text; envvar=['WEATHER_UNITS', 'UNITS'] renders '(env var: '['WEATHER_UNITS', 'UNITS']')' instead of '(env var: 'WEATHER_UNITS', 'UNITS')'. Empty envvar values should omit the envvar hint in both error messages and help output, and sequence envvars should format cleanly as comma-separated quoted names.".to_string(),
+        attachment,
+    }))
 }
 
 /// `POST /api/sessions`
@@ -541,7 +811,7 @@ pub async fn get_eval_by_id(
     Ok(Json(eval))
 }
 
-fn infer_mime_from_filename(filename: &str) -> &'static str {
+pub(crate) fn infer_mime_from_filename(filename: &str) -> &'static str {
     let lower = filename.to_ascii_lowercase();
     if lower.ends_with(".mp4") {
         "video/mp4"
