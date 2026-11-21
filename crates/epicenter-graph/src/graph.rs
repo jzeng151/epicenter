@@ -383,6 +383,8 @@ impl RepoCallGraph {
             edges,
             semantic_hazards: Vec::new(),
             composite_risk_score,
+            root_cause_depth_score: 50.0,
+            bandaid_debt_warning: None,
         }
     }
 

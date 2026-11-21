@@ -117,14 +117,22 @@ impl From<Vec<ContentPart>> for InteractionInput {
 pub enum ResponseFormat {
     /// Audio modality format (`{ "type": "audio" }`), used with `gemini-3.8-flash-tts`.
     Audio(AudioResponseFormat),
-    /// JSON Schema object for structured output generation.
-    JsonSchema(Value),
+    /// Structured JSON Schema format (`{ "type": "text", "mime_type": "application/json", "schema": ... }`).
+    JsonSchema(JsonSchemaResponseFormat),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioResponseFormat {
     #[serde(rename = "type")]
     pub format_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JsonSchemaResponseFormat {
+    #[serde(rename = "type")]
+    pub format_type: String,
+    pub mime_type: String,
+    pub schema: Value,
 }
 
 impl ResponseFormat {
@@ -135,7 +143,11 @@ impl ResponseFormat {
     }
 
     pub fn json_schema(schema: Value) -> Self {
-        Self::JsonSchema(schema)
+        Self::JsonSchema(JsonSchemaResponseFormat {
+            format_type: "text".to_string(),
+            mime_type: "application/json".to_string(),
+            schema,
+        })
     }
 }
 
@@ -144,39 +156,34 @@ impl ResponseFormat {
 pub struct EnvironmentSource {
     #[serde(rename = "type")]
     pub source_type: String,
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mount_path: Option<String>,
+    pub source: String,
+    pub target: String,
 }
 
 impl EnvironmentSource {
-    pub fn git(url: impl Into<String>, branch: Option<String>, commit: Option<String>) -> Self {
+    pub fn repository(repo_url: impl Into<String>, target: impl Into<String>) -> Self {
         Self {
-            source_type: "git".to_string(),
-            url: url.into(),
-            branch,
-            commit,
-            mount_path: None,
+            source_type: "repository".to_string(),
+            source: repo_url.into(),
+            target: target.into(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkAllowlistDomain {
+    pub domain: String,
 }
 
 /// Network egress policy for a Managed Agent remote sandbox.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnvironmentNetwork {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowlist: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    pub allowlist: Vec<NetworkAllowlistDomain>,
 }
 
-/// Remote sandbox environment specification for Managed Agent interactions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InteractionEnvironment {
+pub struct RemoteEnvironmentConfig {
     #[serde(rename = "type")]
     pub env_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -187,39 +194,54 @@ pub struct InteractionEnvironment {
     pub network: Option<EnvironmentNetwork>,
 }
 
+/// Remote sandbox environment specification (`"remote"` shorthand or `RemoteEnvironmentConfig` object).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum InteractionEnvironment {
+    Shorthand(String),
+    Config(RemoteEnvironmentConfig),
+}
+
 impl InteractionEnvironment {
+    /// Clean `"remote"` shorthand that provisions a fresh Ubuntu sandbox with git/python/node.
+    pub fn remote() -> Self {
+        Self::Shorthand("remote".to_string())
+    }
+
     pub fn remote_repo(
         repo_url: impl Into<String>,
-        branch: Option<String>,
-        commit: Option<String>,
+        _branch: Option<String>,
+        _commit: Option<String>,
         allowlist: Vec<String>,
     ) -> Self {
-        Self {
+        Self::Config(RemoteEnvironmentConfig {
             env_type: "remote".to_string(),
             environment_id: None,
-            sources: vec![EnvironmentSource::git(repo_url, branch, commit)],
+            sources: vec![EnvironmentSource::repository(repo_url, "/workspace/repo")],
             network: if allowlist.is_empty() {
                 None
             } else {
                 Some(EnvironmentNetwork {
-                    allowlist,
-                    enabled: Some(true),
+                    allowlist: allowlist
+                        .into_iter()
+                        .map(|domain| NetworkAllowlistDomain { domain })
+                        .collect(),
                 })
             },
-        }
+        })
     }
 
     pub fn existing_remote(environment_id: impl Into<String>) -> Self {
-        Self {
+        Self::Config(RemoteEnvironmentConfig {
             env_type: "remote".to_string(),
             environment_id: Some(environment_id.into()),
             sources: Vec::new(),
             network: None,
-        }
+        })
     }
 }
 
-/// Optional generation tuning parameters.
+/// Optional generation tuning parameters (including multi-speaker TTS `speech_config`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GenerationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -228,6 +250,8 @@ pub struct GenerationConfig {
     pub max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speech_config: Option<Value>,
 }
 
 /// Request body for `POST /v1beta/interactions`.

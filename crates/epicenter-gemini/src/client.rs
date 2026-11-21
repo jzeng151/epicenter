@@ -5,7 +5,8 @@ use crate::types::{
     InteractionStatus, ResponseFormat, UploadFileResponse,
 };
 use epicenter_common::{
-    Gemini4Model, EPICENTER_NEON_AGENT_NAME, GEMINI_TTS_MODEL, MANAGED_AGENT_BASE,
+    DialogueSpeaker, Gemini4Model, WarRoomTurn, EPICENTER_NEON_AGENT_NAME, GEMINI_TTS_MODEL,
+    MANAGED_AGENT_BASE,
 };
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -372,6 +373,68 @@ impl GeminiClient {
 
         let resp = self.create_interaction(&req).await?;
         resp.extract_audio_bytes()
+    }
+
+    /// Synthesizes a 2-speaker war-room dialogue WAV (`Architect` vs. `Auditor`) via `gemini-3.8-flash-tts`,
+    /// automatically falling back to single-prompt narration if multi-speaker annotations are rejected.
+    pub async fn synthesize_war_room_wav(
+        &self,
+        turns: &[WarRoomTurn],
+    ) -> Result<Vec<u8>, GeminiError> {
+        let content_parts: Vec<serde_json::Value> = turns
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "text",
+                    "text": t.text,
+                    "annotations": [{
+                        "type": "speech_metadata",
+                        "speaker": t.speaker.label(),
+                        "style": t.speaker.delivery_style()
+                    }]
+                })
+            })
+            .collect();
+
+        let payload = json!({
+            "model": GEMINI_TTS_MODEL,
+            "input": [{
+                "type": "user_input",
+                "content": content_parts
+            }],
+            "response_format": { "type": "audio" },
+            "generation_config": {
+                "speech_config": {
+                    "speakers": [
+                        {
+                            "speaker": DialogueSpeaker::Architect.label(),
+                            "voice": DialogueSpeaker::Architect.prebuilt_voice()
+                        },
+                        {
+                            "speaker": DialogueSpeaker::Auditor.label(),
+                            "voice": DialogueSpeaker::Auditor.prebuilt_voice()
+                        }
+                    ]
+                }
+            }
+        });
+
+        let url = format!("{}/v1beta/interactions", self.config.base_url);
+        match self.send_json_with_retry(Method::POST, &url, &payload).await {
+            Ok(resp) => {
+                let parsed: InteractionResponse = resp.json().await?;
+                parsed.extract_audio_bytes()
+            }
+            Err(err) => {
+                warn!(error = %err, "multi-speaker TTS failed; falling back to combined script TTS");
+                let fallback_script = turns
+                    .iter()
+                    .map(|t| format!("{}: {}", t.speaker.label(), t.text))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.synthesize_briefing_wav(&fallback_script, None).await
+            }
+        }
     }
 
     async fn send_json_with_retry<T: serde::Serialize>(

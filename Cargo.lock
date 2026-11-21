@@ -603,20 +603,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "epicenter-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "epicenter-common",
+ "epicenter-gemini",
+ "epicenter-graph",
+ "futures",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
 name = "epicenter-eval"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "dotenvy",
  "epicenter-common",
+ "epicenter-engine",
  "epicenter-gemini",
  "epicenter-graph",
+ "futures",
+ "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -658,10 +687,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "dotenvy",
  "epicenter-common",
+ "epicenter-engine",
  "epicenter-gemini",
  "epicenter-graph",
+ "futures",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
@@ -669,18 +702,24 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
 name = "epicenter-web"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "console_error_panic_hook",
  "epicenter-common",
+ "gloo-net",
+ "js-sys",
  "leptos",
  "serde",
  "serde_json",
+ "uuid",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

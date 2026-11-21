@@ -45,7 +45,9 @@ mod tests {
         assert_eq!(v["input"][0]["type"], "text");
         assert_eq!(v["input"][1]["type"], "video");
         assert_eq!(v["input"][1]["mime_type"], "video/mp4");
-        assert_eq!(v["response_format"]["type"], "object");
+        assert_eq!(v["response_format"]["type"], "text");
+        assert_eq!(v["response_format"]["mime_type"], "application/json");
+        assert_eq!(v["response_format"]["schema"]["type"], "object");
     }
 
     #[test]
@@ -67,12 +69,16 @@ mod tests {
         assert!(v.get("model").is_none());
         assert_eq!(v["background"], true);
         assert_eq!(v["environment"]["type"], "remote");
-        assert_eq!(v["environment"]["sources"][0]["type"], "git");
+        assert_eq!(v["environment"]["sources"][0]["type"], "repository");
         assert_eq!(
-            v["environment"]["sources"][0]["url"],
+            v["environment"]["sources"][0]["source"],
             "https://github.com/jzeng151/epicenter.git"
         );
-        assert_eq!(v["environment"]["network"]["allowlist"][0], "pypi.org");
+        assert_eq!(v["environment"]["sources"][0]["target"], "/workspace/repo");
+        assert_eq!(
+            v["environment"]["network"]["allowlist"][0]["domain"],
+            "pypi.org"
+        );
     }
 
     #[test]

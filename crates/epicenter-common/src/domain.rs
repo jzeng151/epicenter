@@ -23,6 +23,16 @@ pub enum TaskKind {
     Feature,
 }
 
+/// How the Red-Gate reproduction gate resolved (Neon -> Carbon escalation -> Characterization fallback).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RedGateResolution {
+    #[default]
+    VerifiedNeon,
+    EscalatedCarbon,
+    CharacterizationFallback,
+}
+
 /// Red-gate specification for a bugfix task (failing reproduction test verified on HEAD).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BugRedGate {
@@ -32,6 +42,8 @@ pub struct BugRedGate {
     pub verified_fails_on_head: bool,
     pub failure_excerpt: String,
     pub base_environment_id: Option<String>,
+    #[serde(default)]
+    pub resolution: RedGateResolution,
 }
 
 /// Red-gate specification for a feature/optimization task (acceptance test + benchmark contract).
@@ -79,6 +91,13 @@ impl RedGateSpec {
             Self::Feature(f) => &f.acceptance_test_patch,
         }
     }
+
+    pub fn locked_test_path(&self) -> Option<&str> {
+        match self {
+            Self::Bug(b) if !b.repro_test_path.is_empty() => Some(&b.repro_test_path),
+            _ => None,
+        }
+    }
 }
 
 /// Supported multimodal input attachment categories.
@@ -96,6 +115,8 @@ pub enum MediaKind {
 /// Metadata for an uploaded multimodal attachment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttachmentMeta {
+    #[serde(default = "Uuid::new_v4")]
+    pub id: Uuid,
     pub filename: String,
     pub mime_type: String,
     pub media_kind: MediaKind,
@@ -126,6 +147,8 @@ pub struct IntakeBrief {
     pub repro_steps: Vec<String>,
     pub multimodal_findings: Vec<MultimodalFinding>,
     pub attachments: Vec<AttachmentMeta>,
+    #[serde(default)]
+    pub suspect_files: Vec<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -142,6 +165,17 @@ pub struct BenchmarkHarnessSpec {
     pub script_content: Option<String>,
 }
 
+/// Architectural depth spectrum ranging from minimal hotfix to full root-cause cure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StrategyDepthTier {
+    SurgicalHotfix,
+    #[default]
+    TargetedRefactor,
+    ArchitecturalRootCause,
+    AlgorithmicOptimization,
+}
+
 /// An individual architectural approach competing in the tournament.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StrategySpec {
@@ -151,6 +185,13 @@ pub struct StrategySpec {
     pub tradeoff_axis: String,
     pub target_files_hint: Vec<String>,
     pub risk_hypothesis: String,
+    #[serde(default)]
+    pub depth_tier: StrategyDepthTier,
+    #[serde(default)]
+    pub anti_overlap_rules: Vec<String>,
+    /// True on Root-Cause strategies so workers can add caller regression tests to shrink dark-zone risk.
+    #[serde(default)]
+    pub allow_caller_tests: bool,
 }
 
 /// Dynamic K (`1..=5`) strategy tournament plan produced before spawning Managed Agent workers.
@@ -196,6 +237,25 @@ pub enum CandidateStatus {
     FailedTests,
     BenchmarkDone,
     Audited,
+}
+
+/// Named archetype badges crowned at the end of Stage 6 auditing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateBadge {
+    BestOverall,
+    SafestEmergencyHotfix,
+    FastestThroughput,
+}
+
+impl CandidateBadge {
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::BestOverall => "Best Overall (Root-Cause Safe)",
+            Self::SafestEmergencyHotfix => "Safest Emergency Hotfix",
+            Self::FastestThroughput => "Fastest Throughput",
+        }
+    }
 }
 
 /// Interleaved benchmark timing and resource measurements for one candidate.
@@ -262,6 +322,12 @@ pub struct CandidateResult {
     pub arena_metrics: Option<CandidateArenaMetrics>,
     pub blast_radius: Option<BlastRadiusReport>,
     pub pareto_optimal: bool,
+    #[serde(default)]
+    pub badges: Vec<CandidateBadge>,
+    #[serde(default)]
+    pub added_caller_tests: bool,
+    #[serde(default)]
+    pub is_rescue_candidate: bool,
 }
 
 impl CandidateResult {
@@ -276,12 +342,69 @@ impl CandidateResult {
             arena_metrics: None,
             blast_radius: None,
             pareto_optimal: false,
+            badges: Vec::new(),
+            added_caller_tests: false,
+            is_rescue_candidate: false,
         }
     }
 
     pub fn is_green(&self) -> bool {
         self.repro_passed && self.regression_suite_passed
     }
+
+    /// Dual-score utility balancing Root-Cause Depth, low Blast-Radius Risk, and Speedup.
+    pub fn dual_utility_score(&self) -> f64 {
+        let speedup = self
+            .arena_metrics
+            .as_ref()
+            .map(|m| m.speedup_pct.clamp(-50.0, 100.0))
+            .unwrap_or(0.0);
+        let (risk, root_cause) = self
+            .blast_radius
+            .as_ref()
+            .map(|b| (b.composite_risk_score as f64, b.root_cause_depth_score as f64))
+            .unwrap_or((50.0, 50.0));
+        // Higher root-cause depth & speedup win; high blast risk & bandaid debt penalize.
+        (0.45 * root_cause) + (0.40 * (100.0 - risk)) + (0.15 * speedup)
+    }
+}
+
+/// Speaker personas for the 2-speaker `gemini-3.8-flash-tts` war-room briefing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DialogueSpeaker {
+    Architect,
+    Auditor,
+}
+
+impl DialogueSpeaker {
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Architect => "Architect",
+            Self::Auditor => "Auditor",
+        }
+    }
+
+    pub const fn prebuilt_voice(&self) -> &'static str {
+        match self {
+            Self::Architect => "Kore",
+            Self::Auditor => "Puck",
+        }
+    }
+
+    pub const fn delivery_style(&self) -> &'static str {
+        match self {
+            Self::Architect => "confident, analytical staff architect",
+            Self::Auditor => "crisp, pragmatic SRE security and performance lead",
+        }
+    }
+}
+
+/// Single dialogue line in the 2-speaker war-room audio briefing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WarRoomTurn {
+    pub speaker: DialogueSpeaker,
+    pub text: String,
 }
 
 /// High-level pipeline stages for a tournament session.
@@ -309,6 +432,8 @@ pub struct TournamentSession {
     pub candidates: Vec<CandidateResult>,
     pub arena_summary: Option<ArenaSummary>,
     pub audio_briefing_url: Option<String>,
+    #[serde(default)]
+    pub war_room_script: Vec<WarRoomTurn>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -335,14 +460,14 @@ pub fn percentile_ms(samples: &[f64], pct: f64) -> f64 {
     }
 }
 
-/// Marks Pareto-optimal candidates in-place (higher `speedup_pct` and lower `composite_risk_score`
-/// among test-passing candidates) and returns their strategy IDs.
+/// Marks Pareto-optimal candidates in-place (higher `speedup_pct`, lower `composite_risk_score`,
+/// or higher `root_cause_depth_score` among test-passing candidates) and returns their strategy IDs.
 pub fn compute_pareto_frontier(candidates: &mut [CandidateResult]) -> Vec<String> {
     for c in candidates.iter_mut() {
         c.pareto_optimal = false;
     }
 
-    let eligible: Vec<(usize, f64, f32)> = candidates
+    let eligible: Vec<(usize, f64, f32, f32)> = candidates
         .iter()
         .enumerate()
         .filter(|(_, c)| c.is_green())
@@ -352,23 +477,23 @@ pub fn compute_pareto_frontier(candidates: &mut [CandidateResult]) -> Vec<String
                 .as_ref()
                 .map(|m| m.speedup_pct)
                 .unwrap_or(0.0);
-            let risk = c
+            let (risk, rc) = c
                 .blast_radius
                 .as_ref()
-                .map(|b| b.composite_risk_score)
-                .unwrap_or(50.0);
-            (idx, speedup, risk)
+                .map(|b| (b.composite_risk_score, b.root_cause_depth_score))
+                .unwrap_or((50.0, 50.0));
+            (idx, speedup, risk, rc)
         })
         .collect();
 
     let mut frontier_ids = Vec::new();
-    for &(i, sp_i, risk_i) in &eligible {
-        let dominated = eligible.iter().any(|&(j, sp_j, risk_j)| {
+    for &(i, sp_i, risk_i, rc_i) in &eligible {
+        let dominated = eligible.iter().any(|&(j, sp_j, risk_j, rc_j)| {
             if i == j {
                 return false;
             }
-            let at_least_as_good = sp_j >= sp_i && risk_j <= risk_i;
-            let strictly_better = sp_j > sp_i || risk_j < risk_i;
+            let at_least_as_good = sp_j >= sp_i && risk_j <= risk_i && rc_j >= rc_i;
+            let strictly_better = sp_j > sp_i || risk_j < risk_i || rc_j > rc_i;
             at_least_as_good && strictly_better
         });
         if !dominated {
@@ -378,4 +503,78 @@ pub fn compute_pareto_frontier(candidates: &mut [CandidateResult]) -> Vec<String
     }
 
     frontier_ids
+}
+
+/// Crowns the 3 Studio archetype badges (`BestOverall`, `SafestEmergencyHotfix`, `FastestThroughput`)
+/// across test-passing candidates and returns the `BestOverall` strategy ID.
+pub fn crown_candidate_badges(candidates: &mut [CandidateResult]) -> Option<String> {
+    for c in candidates.iter_mut() {
+        c.badges.clear();
+    }
+
+    let green_indices: Vec<usize> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.is_green())
+        .map(|(i, _)| i)
+        .collect();
+
+    if green_indices.is_empty() {
+        return None;
+    }
+
+    let best_overall_idx = *green_indices
+        .iter()
+        .max_by(|&&a, &&b| {
+            candidates[a]
+                .dual_utility_score()
+                .total_cmp(&candidates[b].dual_utility_score())
+        })
+        .unwrap();
+
+    let safest_idx = *green_indices
+        .iter()
+        .min_by(|&&a, &&b| {
+            let ra = candidates[a]
+                .blast_radius
+                .as_ref()
+                .map(|r| r.composite_risk_score)
+                .unwrap_or(100.0);
+            let rb = candidates[b]
+                .blast_radius
+                .as_ref()
+                .map(|r| r.composite_risk_score)
+                .unwrap_or(100.0);
+            ra.total_cmp(&rb)
+        })
+        .unwrap();
+
+    let fastest_idx = *green_indices
+        .iter()
+        .max_by(|&&a, &&b| {
+            let sa = candidates[a]
+                .arena_metrics
+                .as_ref()
+                .map(|m| m.speedup_pct)
+                .unwrap_or(f64::NEG_INFINITY);
+            let sb = candidates[b]
+                .arena_metrics
+                .as_ref()
+                .map(|m| m.speedup_pct)
+                .unwrap_or(f64::NEG_INFINITY);
+            sa.total_cmp(&sb)
+        })
+        .unwrap();
+
+    candidates[best_overall_idx]
+        .badges
+        .push(CandidateBadge::BestOverall);
+    candidates[safest_idx]
+        .badges
+        .push(CandidateBadge::SafestEmergencyHotfix);
+    candidates[fastest_idx]
+        .badges
+        .push(CandidateBadge::FastestThroughput);
+
+    Some(candidates[best_overall_idx].strategy_id.clone())
 }

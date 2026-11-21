@@ -82,15 +82,41 @@ pub struct SemanticHazard {
     pub mitigation: String,
 }
 
-/// Combined structural (AST/call-graph/coverage) + semantic blast-radius report.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+fn default_root_cause_score() -> f32 {
+    50.0
+}
+
+/// Combined structural (AST/call-graph/coverage) + semantic blast-radius & root-cause report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BlastRadiusReport {
     pub ring0_mutated: Vec<GraphNode>,
     pub ring1_direct_callers: Vec<GraphNode>,
     pub ring2_transitive_entrypoints: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
     pub semantic_hazards: Vec<SemanticHazard>,
+    /// Breakage/collateral risk score (`0.0..=100.0`, lower is safer).
     pub composite_risk_score: f32,
+    /// Architectural root-cause cure depth (`0.0..=100.0`, higher = cures root invariant rather than stacking bandaid debt).
+    #[serde(default = "default_root_cause_score")]
+    pub root_cause_depth_score: f32,
+    /// Optional warning emitted by Carbon when a candidate is a symptom-only bandaid that stacks tech debt.
+    #[serde(default)]
+    pub bandaid_debt_warning: Option<String>,
+}
+
+impl Default for BlastRadiusReport {
+    fn default() -> Self {
+        Self {
+            ring0_mutated: Vec::new(),
+            ring1_direct_callers: Vec::new(),
+            ring2_transitive_entrypoints: Vec::new(),
+            edges: Vec::new(),
+            semantic_hazards: Vec::new(),
+            composite_risk_score: 0.0,
+            root_cause_depth_score: 50.0,
+            bandaid_debt_warning: None,
+        }
+    }
 }
 
 impl BlastRadiusReport {

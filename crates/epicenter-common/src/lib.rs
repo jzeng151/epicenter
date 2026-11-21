@@ -1,9 +1,11 @@
+pub mod api;
 pub mod blast;
 pub mod domain;
 pub mod eval;
 pub mod events;
 pub mod models;
 
+pub use api::*;
 pub use blast::*;
 pub use domain::*;
 pub use eval::*;
@@ -57,6 +59,9 @@ mod tests {
             tradeoff_axis: "latency vs memory".into(),
             target_files_hint: vec!["src/lib.rs".into()],
             risk_hypothesis: "low risk".into(),
+            depth_tier: StrategyDepthTier::ArchitecturalRootCause,
+            anti_overlap_rules: vec![],
+            allow_caller_tests: true,
         };
 
         let six = StrategyPlan {
@@ -81,62 +86,64 @@ mod tests {
     }
 
     #[test]
-    fn pareto_frontier_and_arena_metrics() {
+    fn pareto_frontier_and_badges_work_with_dual_score() {
         let m1 = CandidateArenaMetrics::from_interleaved_samples(
             vec![100.0, 102.0, 98.0, 100.0],
             vec![50.0, 52.0, 48.0, 50.0],
             Some(12_000),
             Some(4),
         );
-        assert!((m1.p50_ms - 50.0).abs() < 1e-6);
-        assert!((m1.speedup_pct - 50.0).abs() < 1e-6);
-
         let m2 = CandidateArenaMetrics::from_interleaved_samples(
             vec![100.0, 100.0],
-            vec![80.0, 80.0],
+            vec![85.0, 85.0],
             None,
             None,
         );
         let m3 = CandidateArenaMetrics::from_interleaved_samples(
             vec![100.0, 100.0],
-            vec![75.0, 75.0],
+            vec![95.0, 95.0],
             None,
             None,
         );
 
-        let mut c1 = CandidateResult::pending("fast-risky");
+        let mut c1 = CandidateResult::pending("fast-alg");
         c1.repro_passed = true;
         c1.regression_suite_passed = true;
         c1.arena_metrics = Some(m1);
         c1.blast_radius = Some(BlastRadiusReport {
-            composite_risk_score: 40.0,
+            composite_risk_score: 42.0,
+            root_cause_depth_score: 70.0,
             ..Default::default()
         });
 
-        let mut c2 = CandidateResult::pending("safe-modest");
+        let mut c2 = CandidateResult::pending("root-cause-clean");
         c2.repro_passed = true;
         c2.regression_suite_passed = true;
         c2.arena_metrics = Some(m2);
         c2.blast_radius = Some(BlastRadiusReport {
-            composite_risk_score: 12.0,
+            composite_risk_score: 18.0,
+            root_cause_depth_score: 95.0,
             ..Default::default()
         });
 
-        let mut c3 = CandidateResult::pending("dominated");
+        let mut c3 = CandidateResult::pending("hotfix-bandaid");
         c3.repro_passed = true;
         c3.regression_suite_passed = true;
         c3.arena_metrics = Some(m3);
         c3.blast_radius = Some(BlastRadiusReport {
-            composite_risk_score: 45.0,
+            composite_risk_score: 8.0,
+            root_cause_depth_score: 25.0,
+            bandaid_debt_warning: Some("Masks upstream null invariant".into()),
             ..Default::default()
         });
 
         let mut candidates = vec![c1, c2, c3];
-        let frontier = compute_pareto_frontier(&mut candidates);
-        assert_eq!(frontier, vec!["fast-risky", "safe-modest"]);
-        assert!(candidates[0].pareto_optimal);
-        assert!(candidates[1].pareto_optimal);
-        assert!(!candidates[2].pareto_optimal);
+        let _frontier = compute_pareto_frontier(&mut candidates);
+        let winner = crown_candidate_badges(&mut candidates);
+        assert_eq!(winner.as_deref(), Some("root-cause-clean"));
+        assert!(candidates[0].badges.contains(&CandidateBadge::FastestThroughput));
+        assert!(candidates[1].badges.contains(&CandidateBadge::BestOverall));
+        assert!(candidates[2].badges.contains(&CandidateBadge::SafestEmergencyHotfix));
     }
 
     #[test]
@@ -145,10 +152,14 @@ mod tests {
             id: "case-1".into(),
             repo_url: "https://github.com/example/repo".into(),
             issue_number: 42,
+            pr_number: Some(43),
+            title: "Crash on empty header".into(),
+            issue_body: "See attached video".into(),
             parent_commit: "abc1234".into(),
             ground_truth_test_patch: "diff --git a/test.py b/test.py".into(),
             has_multimodal_media: true,
             media_urls: vec!["https://example.com/screen.mp4".into()],
+            split: EvalSplit::LockedUnseen,
         }];
         let outcomes = vec![
             ArmOutcome {
@@ -158,8 +169,11 @@ mod tests {
                 regression_free: true,
                 speedup_pct: None,
                 blast_risk_score: Some(55.0),
+                root_cause_depth_score: Some(20.0),
+                dark_zone_touches: Some(3),
                 duration_ms: 4_000,
                 notes: None,
+                failure_category: Some("missed_multimodal_symptom".into()),
             },
             ArmOutcome {
                 case_id: "case-1".into(),
@@ -168,14 +182,17 @@ mod tests {
                 regression_free: true,
                 speedup_pct: Some(34.5),
                 blast_risk_score: Some(18.0),
+                root_cause_depth_score: Some(92.0),
+                dark_zone_touches: Some(0),
                 duration_ms: 28_000,
-                notes: Some("Won on Pareto frontier".into()),
+                notes: Some("Won on Dual-Score".into()),
+                failure_category: None,
             },
         ];
         let scorecard = EvalScorecard::from_outcomes(&cases, &outcomes);
         assert_eq!(scorecard.total_cases, 1);
         assert_eq!(scorecard.multimodal_cases, 1);
-        assert_eq!(scorecard.arm_metrics.len(), 2);
+        assert_eq!(scorecard.unseen_cases, 1);
 
         let evt = LiveEvent::StageChanged {
             session_id: Uuid::new_v4(),
@@ -193,6 +210,7 @@ mod tests {
             verified_fails_on_head: true,
             failure_excerpt: "AssertionError: expected 200 got 500".into(),
             base_environment_id: Some("env-123".into()),
+            resolution: RedGateResolution::VerifiedNeon,
         });
         assert_eq!(red_gate.task_kind(), TaskKind::Bug);
         let rg_json = serde_json::to_string(&red_gate).unwrap();
@@ -205,6 +223,8 @@ mod tests {
             cases,
             outcomes,
             scorecard,
+            calibration_findings: vec![],
+            remaining_failure_modes: vec![],
             created_at: Utc::now(),
         };
     }

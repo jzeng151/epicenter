@@ -4,6 +4,7 @@ members = [
     "crates/epicenter-common",
     "crates/epicenter-graph",
     "crates/epicenter-gemini",
+    "crates/epicenter-engine",
     "crates/epicenter-server",
     "crates/epicenter-web",
     "crates/epicenter-eval",
@@ -49,8 +50,42 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Web (WASM)
 leptos = { version = "0.8", features = ["csr"] }
-web-sys = { version = "0.3", features = ["Window", "Document", "EventSource", "MessageEvent", "HtmlAudioElement", "Blob", "Url", "FormData", "File", "FileList", "HtmlInputElement"] }
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Navigator",
+    "EventSource",
+    "MessageEvent",
+    "HtmlAudioElement",
+    "HtmlInputElement",
+    "HtmlTextAreaElement",
+    "HtmlSelectElement",
+    "HtmlAnchorElement",
+    "Element",
+    "SvgElement",
+    "Blob",
+    "BlobEvent",
+    "BlobPropertyBag",
+    "Url",
+    "FormData",
+    "File",
+    "FileList",
+    "DragEvent",
+    "DataTransfer",
+    "MouseEvent",
+    "WheelEvent",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamConstraints",
+    "DisplayMediaStreamConstraints",
+    "MediaRecorder",
+    "MediaRecorderOptions",
+    "Clipboard",
+] }
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+gloo-net = { version = "0.6", features = ["http"] }
 console_error_panic_hook = "0.1"
 
 # CLI / Testing
@@ -61,3 +96,4 @@ tempfile = "3"
 epicenter-common = { path = "crates/epicenter-common" }
 epicenter-graph = { path = "crates/epicenter-graph" }
 epicenter-gemini = { path = "crates/epicenter-gemini" }
+epicenter-engine = { path = "crates/epicenter-engine" }
