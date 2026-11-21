@@ -155,6 +155,8 @@ pub fn MultimodalIntakeDeck(
     let active_recorder = StoredValue::new_local(Option::<ActiveRecorder>::None);
 
     let submitting = RwSignal::new(false);
+    let loading_preset = RwSignal::new(false);
+    let preset_pr_url = RwSignal::new(Option::<String>::None);
     let error_msg = RwSignal::new(Option::<String>::None);
     let status_note = RwSignal::new(Option::<String>::None);
 
@@ -346,19 +348,71 @@ pub fn MultimodalIntakeDeck(
     };
 
     let load_github_preset = move |_| {
-        repo_url.set("https://github.com/encode/httpx".to_string());
-        commit_sha.set(String::new());
-        git_ref.set("master".to_string());
-        task_kind.set(TaskKind::Bug);
-        title.set("Preserve query parameter bracket encoding & auth header stripping on cross-origin redirects".to_string());
-        problem_statement.set(
-            "When following a 302 redirect across hosts with httpx.Client, query strings containing square brackets or percent-encoded separators are double-normalized and non-standard casing in sensitive headers can leak across redirects. Reproduce with a failing pytest test, compare surgical vs. root-cause URL/redirect refactors in parallel sandboxes, benchmark redirect throughput, and audit caller blast radius."
-                .to_string(),
-        );
+        if loading_preset.get_untracked() {
+            return;
+        }
+        loading_preset.set(true);
         error_msg.set(None);
         status_note.set(Some(
-            "Loaded real GitHub preset (encode/httpx). Ready to launch tournament!".to_string(),
+            "Loading pinned pallets/click#3884 bug preset & terminal screenshot from server..."
+                .to_string(),
         ));
+
+        spawn_local(async move {
+            match api_client::load_real_bug_preset().await {
+                Ok(resp) => {
+                    repo_url.set(resp.repo_url);
+                    commit_sha.set(resp.commit_sha.unwrap_or_default());
+                    git_ref.set(resp.git_ref.unwrap_or_default());
+                    task_kind.set(resp.task_kind);
+                    title.set(resp.title);
+                    problem_statement.set(resp.problem_statement);
+                    preset_pr_url.set(resp.pr_url);
+
+                    let attached_note = if let Some(att) = resp.attachment {
+                        let name = att.filename.clone();
+                        attachments.update(|list| {
+                            if let Some(existing) = list
+                                .iter_mut()
+                                .find(|x| x.id == att.id || x.filename == att.filename)
+                            {
+                                *existing = att;
+                            } else {
+                                list.push(att);
+                            }
+                        });
+                        format!(" with screenshot '{name}' queued for Stage 1 Hydrogen")
+                    } else {
+                        " (server returned no preset screenshot)".to_string()
+                    };
+
+                    status_note.set(Some(format!(
+                        "Loaded real pinned GitHub bug preset (pallets/click#3884){attached_note}."
+                    )));
+                }
+                Err(err) => {
+                    repo_url.set("https://github.com/pallets/click".to_string());
+                    commit_sha.set("bb695aaecdef95832d167fc1d508921745aa824e".to_string());
+                    git_ref.set(String::new());
+                    task_kind.set(TaskKind::Bug);
+                    title.set(
+                        "Fix show_envvar output for a sequence or an empty envvar (pallets/click#3884)"
+                            .to_string(),
+                    );
+                    problem_statement.set(
+                        "In pallets/click, Option(show_envvar=True) produces broken help output when envvar is an empty string/sequence (emitting an empty '[env var: ]' suffix) or a sequence of environment variable names. Reproduce on pinned parent commit bb695aa with a failing pytest Red-Gate test covering empty and sequence envvars in Option.get_help_extra / show_envvar, then compare parallel strategies and audit caller blast radius."
+                            .to_string(),
+                    );
+                    preset_pr_url.set(Some(
+                        "https://github.com/pallets/click/pull/3884".to_string(),
+                    ));
+                    status_note.set(Some(format!(
+                        "Server preset endpoint unreachable ({err}) — populated real pinned pallets/click#3884 metadata (commit bb695aa) locally without auto-attaching the server screenshot. Drop a screenshot manually or verify epicenter-server is running."
+                    )));
+                }
+            }
+            loading_preset.set(false);
+        });
     };
 
     let on_drag_over = move |ev: DragEvent| {
@@ -415,7 +469,7 @@ pub fn MultimodalIntakeDeck(
         let problem = problem_statement.get_untracked().trim().to_string();
 
         if repo.is_empty() {
-            error_msg.set(Some("Repository URL is required (e.g. https://github.com/encode/httpx).".to_string()));
+            error_msg.set(Some("Repository URL is required (e.g. https://github.com/pallets/click).".to_string()));
             return;
         }
         if problem.is_empty() {
@@ -470,113 +524,93 @@ pub fn MultimodalIntakeDeck(
                         <span class="badge badge-cyan">"Gemini 4 Hydrogen"</span>
                     </h2>
                     <div class="panel-subtitle">
-                        "Beyond a text box — drop screen recordings, stacktrace screenshots, PDFs, or record live from your browser."
+                        "Media-first bug intake — capture screenshots, screen recordings, or voice notes directly into the 7-stage Gemini 4 tournament."
                     </div>
                 </div>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    {move || preset_pr_url.get().map(|pr_url| view! {
+                        <a
+                            href=pr_url
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="badge badge-emerald"
+                            style="text-decoration:none;"
+                        >
+                            "Pinned PR Reference ↗"
+                        </a>
+                    })}
                     <button
                         type="button"
                         class="btn btn-amber btn-sm"
+                        disabled=move || loading_preset.get()
                         on:click=load_github_preset
                     >
-                        "Load Real GitHub Bug Preset"
+                        {move || if loading_preset.get() {
+                            "Loading Real Bug Preset..."
+                        } else {
+                            "Load Real GitHub Bug Preset (with Screenshot)"
+                        }}
                     </button>
                 </div>
             </div>
 
             <form class="panel-body" on:submit=on_submit>
+                // Visual flow strip explaining how captured media drives every stage of Epicenter
+                <div class="pipeline-flow-strip" aria-label="Multimodal pipeline flow">
+                    <span class="pipeline-flow-step active">
+                        <span class="model-dot dot-cyan"></span>
+                        <strong>"Stage 1 Hydrogen"</strong>
+                        "Media → Symbols & Repro"
+                    </span>
+                    <span class="pipeline-flow-arrow">"→"</span>
+                    <span class="pipeline-flow-step">
+                        <span class="model-dot dot-red"></span>
+                        <strong>"Stage 2 Red-Gate"</strong>
+                        "Host-Verified HEAD Fail"
+                    </span>
+                    <span class="pipeline-flow-arrow">"→"</span>
+                    <span class="pipeline-flow-step">
+                        <span class="model-dot dot-emerald"></span>
+                        <strong>"Stage 3–4 Strategies"</strong>
+                        "Parallel Sandboxes"
+                    </span>
+                    <span class="pipeline-flow-arrow">"→"</span>
+                    <span class="pipeline-flow-step">
+                        <span class="model-dot dot-violet"></span>
+                        <strong>"Stage 6 Carbon Audit"</strong>
+                        "Blast-Radius & Hazards"
+                    </span>
+                    <span class="pipeline-flow-arrow">"→"</span>
+                    <span class="pipeline-flow-step">
+                        <span class="model-dot dot-amber"></span>
+                        <strong>"Stage 7 Flash TTS"</strong>
+                        "2-Speaker War-Room Briefing"
+                    </span>
+                </div>
+
                 <div class="intake-grid">
-                    // Left column: Repository & Problem Statement
-                    <div class="form-stack">
-                        <div class="form-row-3">
-                            <div>
-                                <label class="field-label">"Target GitHub Repository URL"</label>
-                                <input
-                                    type="url"
-                                    class="input mono"
-                                    placeholder="https://github.com/encode/httpx"
-                                    prop:value=move || repo_url.get()
-                                    on:input=move |ev| repo_url.set(event_target_value(&ev))
-                                />
-                            </div>
-                            <div>
-                                <label class="field-label">"Git Ref (Optional)"</label>
-                                <input
-                                    type="text"
-                                    class="input mono"
-                                    placeholder="main"
-                                    prop:value=move || git_ref.get()
-                                    on:input=move |ev| git_ref.set(event_target_value(&ev))
-                                />
-                            </div>
-                            <div>
-                                <label class="field-label">"Commit SHA (Optional)"</label>
-                                <input
-                                    type="text"
-                                    class="input mono"
-                                    placeholder="HEAD"
-                                    prop:value=move || commit_sha.get()
-                                    on:input=move |ev| commit_sha.set(event_target_value(&ev))
-                                />
-                            </div>
+                    // Primary Left Column: Multimodal Media Capture + Inline Previews
+                    <div class="form-stack intake-media-col">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                            <span class="field-label" style="margin:0;color:#7dd3fc;">
+                                "1. Capture or Drop Visual / Video / Audio Evidence"
+                            </span>
+                            <span class="badge badge-cyan">
+                                {move || format!("{} queued", attachments.get().len())}
+                            </span>
                         </div>
 
-                        <div class="form-row-2">
-                            <div>
-                                <label class="field-label">"Task Kind"</label>
-                                <div class="task-kind-toggle">
-                                    <button
-                                        type="button"
-                                        class=move || if task_kind.get() == TaskKind::Bug { "kind-btn active" } else { "kind-btn" }
-                                        on:click=move |_| task_kind.set(TaskKind::Bug)
-                                    >
-                                        "Bug Fix (Failing Red-Gate)"
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class=move || if task_kind.get() == TaskKind::Feature { "kind-btn active" } else { "kind-btn" }
-                                        on:click=move |_| task_kind.set(TaskKind::Feature)
-                                    >
-                                        "Feature / Optimization"
-                                    </button>
-                                </div>
-                            </div>
-                            <div>
-                                <label class="field-label">"Session Title (Optional)"</label>
-                                <input
-                                    type="text"
-                                    class="input"
-                                    placeholder="Short headline for tournament brief"
-                                    prop:value=move || title.get()
-                                    on:input=move |ev| title.set(event_target_value(&ev))
-                                />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label class="field-label">"Problem Statement / Failure Notes"</label>
-                            <textarea
-                                class="textarea"
-                                placeholder="Describe the bug, expected vs. actual behavior, performance target, or paste crash logs..."
-                                prop:value=move || problem_statement.get()
-                                on:input=move |ev| problem_statement.set(event_target_value(&ev))
-                            ></textarea>
-                        </div>
-                    </div>
-
-                    // Right column: Multimodal Dropzone + Live web-sys Capture
-                    <div class="form-stack">
                         <div
-                            class=move || if is_dragging.get() { "dropzone dragging" } else { "dropzone" }
+                            class=move || if is_dragging.get() { "dropzone dropzone-primary dragging" } else { "dropzone dropzone-primary" }
                             on:dragover=on_drag_over
                             on:dragleave=on_drag_leave
                             on:drop=on_drop
                         >
                             <div class="dropzone-title">
-                                "Drop Multimodal Evidence Here"
+                                "Drop Screenshots, Screen Recordings, Voice Notes, or PDFs"
                             </div>
                             <div class="dropzone-hint">
-                                ".mp4 · .webm · .gif · .png · .jpg · .pdf · .wav · .mp3  — uploaded directly to Hydrogen intake"
+                                ".png · .jpg · .mp4 · .webm · .gif · .wav · .mp3 · .pdf — streamed to Gemini 4 Hydrogen for visual trace & symbol extraction"
                             </div>
 
                             <input
@@ -591,14 +625,14 @@ pub fn MultimodalIntakeDeck(
                             <div class="capture-controls">
                                 <button
                                     type="button"
-                                    class="btn btn-sm"
+                                    class="btn btn-primary btn-sm"
                                     on:click=move |_| {
                                         if let Some(input) = file_input_ref.get() {
                                             input.click();
                                         }
                                     }
                                 >
-                                    "Browse Files"
+                                    "Browse Media Files"
                                 </button>
 
                                 {move || match recording_mode.get() {
@@ -650,44 +684,183 @@ pub fn MultimodalIntakeDeck(
                             })}
                         </div>
 
-                        // Uploaded attachment chips
+                        // Inline media preview gallery right below the dropzone
                         {move || {
                             let items = attachments.get();
                             if items.is_empty() {
                                 view! {
-                                    <div style="font-size:11.5px;color:var(--text-dim);text-align:center;">
-                                        "No attachments queued yet — text-only or multimodal sessions both work."
+                                    <div class="intake-preview-empty">
+                                        "No media queued yet — click \"Load Real GitHub Bug Preset (with Screenshot)\" above, drop a failing terminal screenshot, or record a live screen/voice clip."
                                     </div>
                                 }.into_any()
                             } else {
                                 view! {
-                                    <div class="attachment-list">
+                                    <div class="intake-preview-grid">
                                         {items.into_iter().map(|att| {
                                             let att_id = att.id;
                                             let size_text = format_bytes(att.size_bytes);
                                             let kind_str = media_kind_label(att.media_kind);
+                                            let filename = att.filename.clone();
+                                            let filename_title = filename.clone();
+                                            let mime = att.mime_type.clone();
+                                            let url = api_client::attachment_content_url(att_id);
+                                            let open_url = url.clone();
+
+                                            let preview_body = match att.media_kind {
+                                                MediaKind::Screenshot => view! {
+                                                    <a href=open_url target="_blank" rel="noopener noreferrer" title="Open full screenshot">
+                                                        <img
+                                                            class="intake-preview-img"
+                                                            src=url
+                                                            alt=filename.clone()
+                                                            loading="lazy"
+                                                        />
+                                                    </a>
+                                                }.into_any(),
+                                                MediaKind::ScreenRecording => view! {
+                                                    <video
+                                                        class="intake-preview-video"
+                                                        controls=true
+                                                        muted=true
+                                                        preload="metadata"
+                                                        src=url
+                                                    ></video>
+                                                }.into_any(),
+                                                MediaKind::VoiceNote => view! {
+                                                    <audio
+                                                        class="intake-preview-audio"
+                                                        controls=true
+                                                        preload="metadata"
+                                                        src=url
+                                                    ></audio>
+                                                }.into_any(),
+                                                MediaKind::Pdf | MediaKind::Log | MediaKind::Other => view! {
+                                                    <div class="intake-preview-file">
+                                                        <span class="mono" style="font-size:11px;color:var(--text-muted);">{mime}</span>
+                                                        <a
+                                                            href=open_url
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            class="mono"
+                                                            style="font-size:11.5px;"
+                                                        >
+                                                            "Inspect Raw File ↗"
+                                                        </a>
+                                                    </div>
+                                                }.into_any(),
+                                            };
+
                                             view! {
-                                                <span class="attachment-badge">
-                                                    <span class="attachment-kind">{kind_str}</span>
-                                                    <span class="mono" style="font-size:11.5px;">{att.filename}</span>
-                                                    <span style="color:var(--text-dim);font-size:11px;">{size_text}</span>
-                                                    <button
-                                                        type="button"
-                                                        class="attachment-remove"
-                                                        title="Remove attachment"
-                                                        on:click=move |_| {
-                                                            attachments.update(|list| list.retain(|x| x.id != att_id));
-                                                        }
-                                                    >
-                                                        "×"
-                                                    </button>
-                                                </span>
+                                                <div class="intake-preview-card">
+                                                    <div class="intake-preview-head">
+                                                        <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+                                                            <span class="attachment-kind">{kind_str}</span>
+                                                            <span class="mono intake-preview-name" title=filename_title>{filename}</span>
+                                                        </div>
+                                                        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+                                                            <span style="color:var(--text-dim);font-size:10.5px;" class="mono">{size_text}</span>
+                                                            <button
+                                                                type="button"
+                                                                class="attachment-remove"
+                                                                title="Remove attachment"
+                                                                on:click=move |_| {
+                                                                    attachments.update(|list| list.retain(|x| x.id != att_id));
+                                                                }
+                                                            >
+                                                                "×"
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                    {preview_body}
+                                                </div>
                                             }
                                         }).collect_view()}
                                     </div>
                                 }.into_any()
                             }
                         }}
+                    </div>
+
+                    // Right Column: Target Repository & Problem Contract
+                    <div class="form-stack">
+                        <span class="field-label" style="margin:0;color:#cbd5e1;">
+                            "2. Target Repository & Bug / Feature Context"
+                        </span>
+
+                        <div class="form-row-3">
+                            <div>
+                                <label class="field-label">"Target GitHub Repository URL"</label>
+                                <input
+                                    type="url"
+                                    class="input mono"
+                                    placeholder="https://github.com/pallets/click"
+                                    prop:value=move || repo_url.get()
+                                    on:input=move |ev| repo_url.set(event_target_value(&ev))
+                                />
+                            </div>
+                            <div>
+                                <label class="field-label">"Commit SHA (Pinned)"</label>
+                                <input
+                                    type="text"
+                                    class="input mono"
+                                    placeholder="HEAD"
+                                    prop:value=move || commit_sha.get()
+                                    on:input=move |ev| commit_sha.set(event_target_value(&ev))
+                                />
+                            </div>
+                            <div>
+                                <label class="field-label">"Git Ref (Optional)"</label>
+                                <input
+                                    type="text"
+                                    class="input mono"
+                                    placeholder="main"
+                                    prop:value=move || git_ref.get()
+                                    on:input=move |ev| git_ref.set(event_target_value(&ev))
+                                />
+                            </div>
+                        </div>
+
+                        <div class="form-row-2">
+                            <div>
+                                <label class="field-label">"Task Kind"</label>
+                                <div class="task-kind-toggle">
+                                    <button
+                                        type="button"
+                                        class=move || if task_kind.get() == TaskKind::Bug { "kind-btn active" } else { "kind-btn" }
+                                        on:click=move |_| task_kind.set(TaskKind::Bug)
+                                    >
+                                        "Bug Fix (Failing Red-Gate)"
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class=move || if task_kind.get() == TaskKind::Feature { "kind-btn active" } else { "kind-btn" }
+                                        on:click=move |_| task_kind.set(TaskKind::Feature)
+                                    >
+                                        "Feature / Optimization"
+                                    </button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="field-label">"Session Title (Optional)"</label>
+                                <input
+                                    type="text"
+                                    class="input"
+                                    placeholder="Short headline for tournament brief"
+                                    prop:value=move || title.get()
+                                    on:input=move |ev| title.set(event_target_value(&ev))
+                                />
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="field-label">"Problem Statement / Failure Notes"</label>
+                            <textarea
+                                class="textarea"
+                                placeholder="Describe the bug, expected vs. actual behavior, performance target, or paste crash logs..."
+                                prop:value=move || problem_statement.get()
+                                on:input=move |ev| problem_statement.set(event_target_value(&ev))
+                            ></textarea>
+                        </div>
 
                         // Error / status feedback
                         {move || error_msg.get().map(|msg| view! {
@@ -701,7 +874,7 @@ pub fn MultimodalIntakeDeck(
                             <button
                                 type="submit"
                                 class="btn btn-primary"
-                                disabled=move || submitting.get() || (uploading_count.get() != 0) || recording_mode.get().is_some()
+                                disabled=move || submitting.get() || loading_preset.get() || (uploading_count.get() != 0) || recording_mode.get().is_some()
                             >
                                 {move || if submitting.get() {
                                     "Launching Gemini 4 Tournament..."
