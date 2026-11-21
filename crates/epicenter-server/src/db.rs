@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use epicenter_common::{
-    AttachmentMeta, FiveSigmaEval, MediaKind, SessionListItem, TournamentSession,
+    AttachmentMeta, FiveSigmaEval, MediaKind, SessionListItem, TournamentSession, TournamentStage,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
@@ -163,6 +163,47 @@ impl DbStore {
             });
         }
         Ok(items)
+    }
+
+    /// Marks any non-terminal sessions (`stage` not `Completed` or `Failed`) left behind by a
+    /// previous server process as `Failed` so reconnecting browser tabs never hang forever on
+    /// an orphaned SSE stream.
+    pub fn mark_orphaned_sessions_failed(&self) -> Result<usize> {
+        let mut orphaned: Vec<TournamentSession> = Vec::new();
+        {
+            let conn = self.lock_conn()?;
+            let mut stmt = conn
+                .prepare("SELECT json_blob FROM sessions")
+                .context("failed to query sessions for orphan cleanup")?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .context("failed to iterate sessions for orphan cleanup")?;
+            for row in rows {
+                let blob = row.context("failed to read session row during orphan cleanup")?;
+                if let Ok(session) = serde_json::from_str::<TournamentSession>(&blob) {
+                    if !matches!(
+                        session.stage,
+                        TournamentStage::Completed | TournamentStage::Failed
+                    ) {
+                        orphaned.push(session);
+                    }
+                }
+            }
+        }
+
+        let count = orphaned.len();
+        for mut session in orphaned {
+            session.stage = TournamentStage::Failed;
+            if session.intake.title.trim().is_empty()
+                || session.intake.title == "Analyzing issue..."
+            {
+                session.intake.title =
+                    "Interrupted by server restart — please start a new session".to_string();
+            }
+            session.updated_at = Utc::now();
+            self.upsert_session(&session)?;
+        }
+        Ok(count)
     }
 
     /// Persists an uploaded multimodal attachment's metadata and raw bytes.

@@ -64,8 +64,8 @@ pub fn base64_encode(input: &[u8]) -> String {
 }
 
 /// Renders a crisp, deterministic dark-terminal PNG screenshot depicting the real
-/// `jzeng151/hermes-lyre` PR #56 speech formatter bugs at parent commit `f03ea6c`.
-pub fn render_hermes_lyre_56_terminal_png() -> Vec<u8> {
+/// `jzeng151/hermes-lyre` PR #58 quadratic span-protection performance bug at commit `938d22c`.
+pub fn render_hermes_lyre_58_terminal_png() -> Vec<u8> {
     const WIDTH: usize = 1088;
     const HEIGHT: usize = 472;
     const SCALE: usize = 2;
@@ -96,7 +96,7 @@ pub fn render_hermes_lyre_56_terminal_png() -> Vec<u8> {
         win_x + 86,
         win_y + 11,
         SCALE,
-        "jzeng151/hermes-lyre @ f03ea6c - speech formatter bug (PR #56)",
+        "jzeng151/hermes-lyre @ 938d22c - quadratic spans.py bug (PR #58)",
         (139, 148, 158),
     );
 
@@ -115,44 +115,75 @@ pub fn render_hermes_lyre_56_terminal_png() -> Vec<u8> {
     let c_ok = (126, 231, 135); // #7EE787
     let c_err_bg = (52, 22, 26);
 
-    // Case 1: Titled Markdown link drops title
+    // Section 1: Workload description
     canvas.draw_text(
         left_x,
         y,
         SCALE,
-        "# 1. Titled link (silently drops link title)",
+        "# Profiling lyre/formatter/spans.py on line with links + $$math$$ + `code`",
         c_muted,
     );
     y += line_step;
 
-    canvas.draw_text(left_x, y, SCALE, ">>> ", c_prompt);
+    canvas.draw_text(left_x, y, SCALE, "$ ", c_prompt);
     canvas.draw_text(
-        left_x + 4 * CHAR_W,
+        left_x + 2 * CHAR_W,
         y,
         SCALE,
-        "format_for_speech('[policy](https://example.test \"Do not share externally\")',",
+        "python -c \"from lyre.formatter import format_for_speech; ...\"",
+        c_cmd,
+    );
+    y += line_step + 6;
+
+    // Section 2: Quadratic scaling measurements
+    canvas.draw_text(
+        left_x,
+        y,
+        SCALE,
+        "input = '`a` `b` ' + '[x](https://e.test/p) $$a+b$$ ' * N",
+        c_muted,
+    );
+    y += line_step + 4;
+
+    canvas.draw_text(
+        left_x,
+        y,
+        SCALE,
+        "  N= 400 ( 13 KB line):   84.2 ms  (baseline)",
         c_cmd,
     );
     y += line_step;
 
-    canvas.draw_text(left_x, y, SCALE, "... ", c_prompt);
     canvas.draw_text(
-        left_x + 4 * CHAR_W,
+        left_x,
         y,
         SCALE,
-        "    profile=\"plain\")",
-        c_cmd,
+        "  N= 800 ( 26 KB line):  331.5 ms  ( 3.94x slower for 2x input!)",
+        c_warn,
     );
-    y += line_step + 4;
+    y += line_step;
 
     canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, c_err_bg);
-    let actual_1 = "ACTUAL: policy, link: https://example.test";
+    let actual_1 = "  N=1600 ( 52 KB line): 1340.8 ms  (15.92x slower for 4x input!)";
     canvas.draw_text(left_x, y, SCALE, actual_1, c_error);
+    y += line_step;
+
+    canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, c_err_bg);
     canvas.draw_text(
-        left_x + actual_1.len() * CHAR_W,
+        left_x,
         y,
         SCALE,
-        "  <- BUG: drops link title!",
+        "  N=3200 (104 KB line): 5210.0 ms  <- BUG: O(n^2) exceeds 100ms budget!",
+        c_error,
+    );
+    y += line_step + 14;
+
+    // Section 3: Root cause & target
+    canvas.draw_text(
+        left_x,
+        y,
+        SCALE,
+        "ROOT CAUSE: for each $$...$$ match, _protect_math rebuilds & sorts link/URL ranges",
         c_warn,
     );
     y += line_step;
@@ -161,96 +192,10 @@ pub fn render_hermes_lyre_56_terminal_png() -> Vec<u8> {
         left_x,
         y,
         SCALE,
-        "EXPECT: [policy](https://example.test \"Do not share externally\")",
+        "EXPECT: build merged exclusion ranges ONCE per line -> 4x input < 8x time (< 90ms)",
         c_ok,
     );
-    y += line_step + 14;
-
-    // Case 2: Tight inline math mangled as Markdown emphasis
-    canvas.draw_text(
-        left_x,
-        y,
-        SCALE,
-        "# 2. Inline math (protect $...$ and \\(...\\); '$5 and *really* $10' stays prose)",
-        c_muted,
-    );
-    y += line_step;
-
-    canvas.draw_text(left_x, y, SCALE, ">>> ", c_prompt);
-    canvas.draw_text(
-        left_x + 4 * CHAR_W,
-        y,
-        SCALE,
-        "format_for_speech('Compute $a*b*c$ and \\\\(a*b*c\\\\)', profile=\"plain\")",
-        c_cmd,
-    );
-    y += line_step + 4;
-
-    canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, c_err_bg);
-    let actual_2 = "ACTUAL: Compute $abc$ and \\(abc\\)";
-    canvas.draw_text(left_x, y, SCALE, actual_2, c_error);
-    canvas.draw_text(
-        left_x + actual_2.len() * CHAR_W,
-        y,
-        SCALE,
-        "  <- BUG: '*' stripped as markdown emphasis!",
-        c_warn,
-    );
-    y += line_step;
-
-    let expect_2 = "EXPECT: Compute $a*b*c$ and \\(a*b*c\\)";
-    canvas.draw_text(left_x, y, SCALE, expect_2, c_ok);
-    canvas.draw_text(
-        left_x + expect_2.len() * CHAR_W,
-        y,
-        SCALE,
-        "  (preserve tight $...$ and \\(...\\) math)",
-        c_muted,
-    );
-    y += line_step + 14;
-
-    // Case 3: Reference-definition title strips '*'
-    canvas.draw_text(
-        left_x,
-        y,
-        SCALE,
-        "# 3. Ref-definition title (strips '*' inside same-line reference title)",
-        c_muted,
-    );
-    y += line_step;
-
-    canvas.draw_text(left_x, y, SCALE, ">>> ", c_prompt);
-    canvas.draw_text(
-        left_x + 4 * CHAR_W,
-        y,
-        SCALE,
-        "format_for_speech('[r]: https://x.test/a \"t *x*\"', profile=\"plain\")",
-        c_cmd,
-    );
-    y += line_step + 4;
-
-    canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, c_err_bg);
-    let actual_3 = "ACTUAL: [r]: https://x.test/a \"t x\"";
-    canvas.draw_text(left_x, y, SCALE, actual_3, c_error);
-    canvas.draw_text(
-        left_x + actual_3.len() * CHAR_W,
-        y,
-        SCALE,
-        "  <- BUG: strips '*' in ref-def title!",
-        c_warn,
-    );
-    y += line_step;
-
-    let expect_3 = "EXPECT: [r]: https://x.test/a \"t *x*\"";
-    canvas.draw_text(left_x, y, SCALE, expect_3, c_ok);
-    canvas.draw_text(
-        left_x + expect_3.len() * CHAR_W,
-        y,
-        SCALE,
-        "  (preserve same-line ref title verbatim)",
-        c_muted,
-    );
-    y += line_step + 14;
+    y += line_step + 16;
 
     // Footer pytest line
     canvas.draw_text(left_x, y, SCALE, "$ ", c_prompt);
@@ -258,7 +203,7 @@ pub fn render_hermes_lyre_56_terminal_png() -> Vec<u8> {
         left_x + 2 * CHAR_W,
         y,
         SCALE,
-        "pytest -q lyre/tests/   # jzeng151/hermes-lyre @ f03ea6c (PR #56)",
+        "pytest -q lyre/tests/formatter/test_performance.py   # @ 938d22c (PR #58)",
         c_muted,
     );
     y += line_step;
@@ -267,7 +212,7 @@ pub fn render_hermes_lyre_56_terminal_png() -> Vec<u8> {
         left_x,
         y,
         SCALE,
-        "3 failed in 0.04s - link titles dropped, inline math & ref titles mangled",
+        "FAILED: ratio 15.9x >= 8.0x (O(n^2) exclusion range rebuild per math match)",
         c_err_sub,
     );
 

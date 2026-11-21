@@ -1,6 +1,6 @@
 use crate::db::infer_media_kind;
 use crate::live_judge::run_live_judge_pr;
-use crate::media::{base64_encode, render_hermes_lyre_56_terminal_png, TempDirGuard};
+use crate::media::{base64_encode, render_hermes_lyre_58_terminal_png, TempDirGuard};
 use crate::state::{apply_event_to_session, AppState};
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, State},
@@ -430,14 +430,14 @@ fn collect_extracted_frames(dir: &StdPath) -> Vec<PathBuf> {
 }
 
 /// `POST /api/presets/real-bug` — provisions a verified real merged GitHub bug-fix PR preset
-/// (`jzeng151/hermes-lyre#56`) pinned to its exact parent commit along with a stored terminal PNG capture.
+/// (`jzeng151/hermes-lyre#58`) pinned to its exact parent commit along with a stored terminal PNG capture.
 pub async fn create_real_bug_preset(
     State(state): State<AppState>,
 ) -> Result<Json<RealBugPresetResponse>, ApiError> {
-    let png_bytes = render_hermes_lyre_56_terminal_png();
+    let png_bytes = render_hermes_lyre_58_terminal_png();
     let attachment = AttachmentMeta {
         id: Uuid::new_v4(),
-        filename: "hermes-lyre-56-speech-formatter-bug.png".to_string(),
+        filename: "hermes-lyre-58-quadratic-spans-bug.png".to_string(),
         mime_type: "image/png".to_string(),
         media_kind: MediaKind::Screenshot,
         size_bytes: png_bytes.len() as u64,
@@ -451,13 +451,13 @@ pub async fn create_real_bug_preset(
 
     Ok(Json(RealBugPresetResponse {
         repo_url: "https://github.com/jzeng151/hermes-lyre".to_string(),
-        commit_sha: "f03ea6ce6a267c2206f82767a682ad1b5962f369".to_string(),
+        commit_sha: "938d22c8e373d3fe773767dfb0041819e5b0132e".to_string(),
         git_ref: None,
-        pr_url: "https://github.com/jzeng151/hermes-lyre/pull/56".to_string(),
+        pr_url: "https://github.com/jzeng151/hermes-lyre/pull/58".to_string(),
         task_kind: TaskKind::Bug,
-        title: "Fix formatter dropping link titles and mangling inline math (jzeng151/hermes-lyre#56)"
+        title: "Fix O(n^2) math exclusion range rebuild in spans.py (jzeng151/hermes-lyre#58)"
             .to_string(),
-        problem_statement: "In jzeng151/hermes-lyre (pinned at parent commit f03ea6ce6a267c2206f82767a682ad1b5962f369, before merged PR #56), format_for_speech drops or mangles three Markdown constructs: (1) titled links like '[policy](https://example.test \"Do not share externally\")' rewrite to 'policy, link: https://example.test', silently dropping the link title instead of preserving titled links verbatim; (2) same-line reference-definition titles like '[r]: https://x.test/a \"t *x*\"' strip '*' inside the title instead of preserving it verbatim; and (3) tight inline/display math like '$a*b*c$', '\\(a*b*c\\)', and '\\[a*b*c\\]' have '*' stripped as Markdown emphasis ('$abc$', '\\(abc\\)'), while dollar prices like '$5 and *really* $10' must remain normal prose. Tests live in lyre/tests/ and run with pytest.".to_string(),
+        problem_statement: "In jzeng151/hermes-lyre (pinned at parent commit 938d22c8e373d3fe773767dfb0041819e5b0132e, before merged PR #58), span protection in lyre/formatter/spans.py is quadratic O(n^2) on lines containing Markdown link destinations, display math ($$...$$), and at least two backtick runs. For every $$...$$ match, the protection pass rebuilds and re-sorts the entire list of link-destination and bare-URL exclusion ranges per match, causing 4x longer inputs to run ~16x slower (a 104 KB line takes ~5.2s instead of <0.1s). Build and merge the exclusion range list ONCE per line and reuse it across all math matches so scaling is linear (4x input stays well under 8x time) without changing any formatted speech output. Tests live in lyre/tests/ and run with pytest.".to_string(),
         attachment,
     }))
 }
