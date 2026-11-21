@@ -636,25 +636,28 @@ async fn attachment_bytes_and_keyframes_endpoints_serve_media_and_handle_non_vid
 }
 
 #[tokio::test]
-async fn real_bug_preset_returns_pallets_click_3884_and_serves_valid_png() {
+async fn real_bug_preset_returns_hermes_lyre_56_and_serves_valid_png() {
     let state = test_state();
     let Json(preset) = create_real_bug_preset(State(state.clone()))
         .await
         .expect("preset creation should succeed");
 
-    assert_eq!(preset.repo_url, "https://github.com/pallets/click");
+    assert_eq!(preset.repo_url, "https://github.com/jzeng151/hermes-lyre");
     assert_eq!(
         preset.commit_sha,
-        "bb695aaecdef95832d167fc1d508921745aa824e"
+        "f03ea6ce6a267c2206f82767a682ad1b5962f369"
     );
     assert!(preset.git_ref.is_none());
-    assert_eq!(preset.pr_url, "https://github.com/pallets/click/pull/3884");
+    assert_eq!(
+        preset.pr_url,
+        "https://github.com/jzeng151/hermes-lyre/pull/56"
+    );
     assert_eq!(preset.task_kind, TaskKind::Bug);
-    assert!(preset.title.contains("pallets/click#3884"));
-    assert!(preset.problem_statement.contains("show_envvar"));
+    assert!(preset.title.contains("jzeng151/hermes-lyre#56"));
+    assert!(preset.problem_statement.contains("format_for_speech"));
     assert_eq!(
         preset.attachment.filename,
-        "click-3884-envvar-terminal-bug.png"
+        "hermes-lyre-56-speech-formatter-bug.png"
     );
     assert_eq!(preset.attachment.mime_type, "image/png");
     assert_eq!(preset.attachment.media_kind, MediaKind::Screenshot);
@@ -737,13 +740,20 @@ async fn router_serves_preset_attachment_keyframes_and_media_downloader_fetches_
         .unwrap();
     assert_eq!(preset_resp.status(), reqwest::StatusCode::OK);
     let preset_json: serde_json::Value = preset_resp.json().await.unwrap();
-    assert_eq!(preset_json["repo_url"], "https://github.com/pallets/click");
+    assert_eq!(
+        preset_json["repo_url"],
+        "https://github.com/jzeng151/hermes-lyre"
+    );
     assert_eq!(
         preset_json["commit_sha"],
-        "bb695aaecdef95832d167fc1d508921745aa824e"
+        "f03ea6ce6a267c2206f82767a682ad1b5962f369"
     );
     assert!(preset_json["git_ref"].is_null());
     assert_eq!(preset_json["task_kind"], "bug");
+    assert_eq!(
+        preset_json["attachment"]["filename"],
+        "hermes-lyre-56-speech-formatter-bug.png"
+    );
     let att_id = preset_json["attachment"]["id"].as_str().unwrap();
 
     // GET /api/attachments/{id}
@@ -787,7 +797,7 @@ async fn eval_latest_refuses_simulated_seed_and_returns_only_live_runs() {
     assert!(is_simulated_eval_label("Offline Run #1"));
     assert!(is_simulated_eval_label("Seeded 5-Sigma Run"));
     assert!(is_simulated_eval_label("SIMULATED benchmark"));
-    assert!(!is_simulated_eval_label("Live Judge: pallets/click#3884"));
+    assert!(!is_simulated_eval_label("Live Judge: jzeng151/hermes-lyre#56"));
     assert!(!is_simulated_eval_label("Live 5-Sigma Eval v1"));
 
     // 1. Disk seed with "offline-dry-run-baseline-seed" MUST be refused (returns None, not seeded).
@@ -816,7 +826,7 @@ async fn eval_latest_refuses_simulated_seed_and_returns_only_live_runs() {
     assert!(db.get_latest_eval_run_or_seed().unwrap().is_none());
 
     // 3. When a real live eval run exists alongside a newer simulated row, return the real live run!
-    let mut live_run = sample_eval_run_with_label("Live Judge: pallets/click#3884");
+    let mut live_run = sample_eval_run_with_label("Live Judge: jzeng151/hermes-lyre#56");
     live_run.created_at = Utc::now() - ChronoDuration::minutes(5);
     db.upsert_eval_run(&live_run).unwrap();
 
@@ -825,7 +835,7 @@ async fn eval_latest_refuses_simulated_seed_and_returns_only_live_runs() {
         .unwrap()
         .expect("must return real live eval run");
     assert_eq!(latest.run_id, live_run.run_id);
-    assert_eq!(latest.label, "Live Judge: pallets/click#3884");
+    assert_eq!(latest.label, "Live Judge: jzeng151/hermes-lyre#56");
 }
 
 #[tokio::test]

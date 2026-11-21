@@ -64,11 +64,12 @@ pub fn base64_encode(input: &[u8]) -> String {
 }
 
 /// Renders a crisp, deterministic dark-terminal PNG screenshot depicting the real
-/// `pallets/click` PR #3884 (`show_envvar`) terminal bug reproduction at commit `bb695aa`.
-pub fn render_click_3884_terminal_png() -> Vec<u8> {
-    const WIDTH: usize = 984;
-    const HEIGHT: usize = 468;
+/// `jzeng151/hermes-lyre` PR #56 speech formatter bugs at parent commit `f03ea6c`.
+pub fn render_hermes_lyre_56_terminal_png() -> Vec<u8> {
+    const WIDTH: usize = 1088;
+    const HEIGHT: usize = 472;
     const SCALE: usize = 2;
+    const CHAR_W: usize = 6 * SCALE;
 
     let mut canvas = RgbCanvas::new(WIDTH, HEIGHT, (13, 17, 23)); // #0D1117
 
@@ -90,12 +91,12 @@ pub fn render_click_3884_terminal_png() -> Vec<u8> {
     canvas.fill_circle(win_x + 40, win_y + 18, 6, (255, 189, 46)); // yellow
     canvas.fill_circle(win_x + 60, win_y + 18, 6, (39, 201, 63)); // green
 
-    // Title bar text (1x crisp label centered vertically).
+    // Title bar text.
     canvas.draw_text(
         win_x + 86,
         win_y + 11,
-        2,
-        "pallets/click @ bb695aa - show_envvar terminal bug (PR #3884)",
+        SCALE,
+        "jzeng151/hermes-lyre @ f03ea6c - speech formatter bug (PR #56)",
         (139, 148, 158),
     );
 
@@ -112,109 +113,153 @@ pub fn render_click_3884_terminal_png() -> Vec<u8> {
     let c_err_sub = (255, 161, 152); // #FFA198
     let c_warn = (210, 153, 34); // #D29922
     let c_ok = (126, 231, 135); // #7EE787
+    let c_err_bg = (52, 22, 26);
 
-    // Command 1: sequence envvar error hint
-    canvas.draw_text(left_x, y, SCALE, "$ ", c_prompt);
-    canvas.draw_text(left_x + 24, y, SCALE, "weather --units invalid", c_cmd);
+    // Case 1: Titled Markdown link drops title
+    canvas.draw_text(
+        left_x,
+        y,
+        SCALE,
+        "# 1. Titled link (silently drops link title)",
+        c_muted,
+    );
     y += line_step;
 
-    canvas.draw_text(left_x, y, SCALE, "Usage: weather [OPTIONS]", c_muted);
+    canvas.draw_text(left_x, y, SCALE, ">>> ", c_prompt);
+    canvas.draw_text(
+        left_x + 4 * CHAR_W,
+        y,
+        SCALE,
+        "format_for_speech('[policy](https://example.test \"Do not share externally\")',",
+        c_cmd,
+    );
     y += line_step;
-    canvas.draw_text(left_x, y, SCALE, "Try 'weather --help' for help.", c_muted);
+
+    canvas.draw_text(left_x, y, SCALE, "... ", c_prompt);
+    canvas.draw_text(
+        left_x + 4 * CHAR_W,
+        y,
+        SCALE,
+        "    profile=\"plain\")",
+        c_cmd,
+    );
     y += line_step + 4;
 
-    // Subtle red highlight strip behind the primary buggy error line.
-    canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, (52, 22, 26));
+    canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, c_err_bg);
+    let actual_1 = "ACTUAL: policy, link: https://example.test";
+    canvas.draw_text(left_x, y, SCALE, actual_1, c_error);
     canvas.draw_text(
-        left_x,
+        left_x + actual_1.len() * CHAR_W,
         y,
         SCALE,
-        "Error: Invalid value for '--units' (env var: '['WEATHER_UNITS', 'UNITS']'):",
-        c_error,
-    );
-    y += line_step;
-
-    canvas.draw_text(
-        left_x,
-        y,
-        SCALE,
-        "  'invalid' is not one of 'metric', 'imperial'.",
-        c_err_sub,
-    );
-    y += line_step;
-
-    canvas.draw_text(
-        left_x,
-        y,
-        SCALE,
-        "  ^ BUG: list repr leaked; expected (env var: 'WEATHER_UNITS', 'UNITS')",
+        "  <- BUG: drops link title!",
         c_warn,
     );
-    y += line_step + 10;
-
-    // Command 2: --help with empty envvar='' and envvar=[]
-    canvas.draw_text(left_x, y, SCALE, "$ ", c_prompt);
-    canvas.draw_text(left_x + 24, y, SCALE, "weather --help", c_cmd);
-    y += line_step;
-
-    canvas.draw_text(left_x, y, SCALE, "Options:", c_cmd);
     y += line_step;
 
     canvas.draw_text(
         left_x,
         y,
         SCALE,
-        "  --units [metric|imperial]  [env var: WEATHER_UNITS, UNITS]",
+        "EXPECT: [policy](https://example.test \"Do not share externally\")",
         c_ok,
     );
-    y += line_step;
+    y += line_step + 14;
 
-    canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, (52, 22, 26));
+    // Case 2: Tight inline math mangled as Markdown emphasis
     canvas.draw_text(
         left_x,
         y,
         SCALE,
-        "  --token TEXT               [env var: ]",
-        c_error,
+        "# 2. Inline math (protect $...$ and \\(...\\); '$5 and *really* $10' stays prose)",
+        c_muted,
     );
+    y += line_step;
+
+    canvas.draw_text(left_x, y, SCALE, ">>> ", c_prompt);
     canvas.draw_text(
-        left_x + 40 * 12 + 12,
+        left_x + 4 * CHAR_W,
         y,
         SCALE,
-        "<- BUG: envvar=''",
+        "format_for_speech('Compute $a*b*c$ and \\\\(a*b*c\\\\)', profile=\"plain\")",
+        c_cmd,
+    );
+    y += line_step + 4;
+
+    canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, c_err_bg);
+    let actual_2 = "ACTUAL: Compute $abc$ and \\(abc\\)";
+    canvas.draw_text(left_x, y, SCALE, actual_2, c_error);
+    canvas.draw_text(
+        left_x + actual_2.len() * CHAR_W,
+        y,
+        SCALE,
+        "  <- BUG: '*' stripped as markdown emphasis!",
         c_warn,
     );
     y += line_step;
 
-    canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, (52, 22, 26));
+    let expect_2 = "EXPECT: Compute $a*b*c$ and \\(a*b*c\\)";
+    canvas.draw_text(left_x, y, SCALE, expect_2, c_ok);
+    canvas.draw_text(
+        left_x + expect_2.len() * CHAR_W,
+        y,
+        SCALE,
+        "  (preserve tight $...$ and \\(...\\) math)",
+        c_muted,
+    );
+    y += line_step + 14;
+
+    // Case 3: Reference-definition title strips '*'
     canvas.draw_text(
         left_x,
         y,
         SCALE,
-        "  --proxy TEXT               [env var: ]",
-        c_error,
+        "# 3. Ref-definition title (strips '*' inside same-line reference title)",
+        c_muted,
     );
+    y += line_step;
+
+    canvas.draw_text(left_x, y, SCALE, ">>> ", c_prompt);
     canvas.draw_text(
-        left_x + 40 * 12 + 12,
+        left_x + 4 * CHAR_W,
         y,
         SCALE,
-        "<- BUG: envvar=[]",
+        "format_for_speech('[r]: https://x.test/a \"t *x*\"', profile=\"plain\")",
+        c_cmd,
+    );
+    y += line_step + 4;
+
+    canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, c_err_bg);
+    let actual_3 = "ACTUAL: [r]: https://x.test/a \"t x\"";
+    canvas.draw_text(left_x, y, SCALE, actual_3, c_error);
+    canvas.draw_text(
+        left_x + actual_3.len() * CHAR_W,
+        y,
+        SCALE,
+        "  <- BUG: strips '*' in ref-def title!",
         c_warn,
     );
-    y += line_step + 10;
+    y += line_step;
 
-    // Command 3: empty envvar in error hint
+    let expect_3 = "EXPECT: [r]: https://x.test/a \"t *x*\"";
+    canvas.draw_text(left_x, y, SCALE, expect_3, c_ok);
+    canvas.draw_text(
+        left_x + expect_3.len() * CHAR_W,
+        y,
+        SCALE,
+        "  (preserve same-line ref title verbatim)",
+        c_muted,
+    );
+    y += line_step + 14;
+
+    // Footer pytest line
     canvas.draw_text(left_x, y, SCALE, "$ ", c_prompt);
-    canvas.draw_text(left_x + 24, y, SCALE, "weather --token", c_cmd);
-    y += line_step;
-
-    canvas.fill_rect(win_x + 8, y - 3, win_w - 16, 20, (52, 22, 26));
     canvas.draw_text(
-        left_x,
+        left_x + 2 * CHAR_W,
         y,
         SCALE,
-        "Error: Option '--token' requires an argument (env var: '').",
-        c_error,
+        "pytest -q lyre/tests/   # jzeng151/hermes-lyre @ f03ea6c (PR #56)",
+        c_muted,
     );
     y += line_step;
 
@@ -222,8 +267,8 @@ pub fn render_click_3884_terminal_png() -> Vec<u8> {
         left_x,
         y,
         SCALE,
-        "  ^ BUG: empty envvar='' or [] should omit env var hint in error & help",
-        c_warn,
+        "3 failed in 0.04s - link titles dropped, inline math & ref titles mangled",
+        c_err_sub,
     );
 
     encode_rgb_png(WIDTH as u32, HEIGHT as u32, &canvas.pixels)
