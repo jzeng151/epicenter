@@ -4,7 +4,9 @@ use crate::EngineRunOptions;
 use epicenter_common::{
     DialogueSpeaker, Gemini4Model, LiveEvent, LogLevel, TournamentSession, WarRoomTurn,
 };
-use epicenter_gemini::{CreateInteractionRequest, GeminiClient, ResponseFormat};
+use epicenter_gemini::{
+    CreateInteractionRequest, GeminiClient, GenerationConfig, ResponseFormat,
+};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -139,6 +141,10 @@ async fn generate_war_room_script(
             "Produce a tight, executive-ready 2-speaker war-room dialogue in strict JSON.".to_string(),
         );
         req.response_format = Some(ResponseFormat::json_schema(war_room_schema()));
+        req.generation_config = Some(GenerationConfig {
+            thinking_level: Some("low".to_string()),
+            ..Default::default()
+        });
 
         if let Ok(resp) = gemini.create_interaction(&req).await {
             if let Ok(parsed) = extract_json_from_text::<WarRoomScriptOutput>(&resp.extract_text()) {

@@ -4,7 +4,9 @@ use epicenter_common::{
     Gemini4Model, LiveEvent, LogLevel, MediaKind, MultimodalFinding, TaskKind, TournamentSession,
     TournamentStage,
 };
-use epicenter_gemini::{ContentPart, CreateInteractionRequest, GeminiClient, ResponseFormat};
+use epicenter_gemini::{
+    ContentPart, CreateInteractionRequest, GeminiClient, GenerationConfig, ResponseFormat,
+};
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
@@ -293,6 +295,10 @@ pub async fn run_intake_stage(
         "You are Gemini 4 Hydrogen performing fast, exact multimodal issue triage. Always return valid JSON.".to_string(),
     );
     req.response_format = Some(ResponseFormat::json_schema(intake_json_schema()));
+    req.generation_config = Some(GenerationConfig {
+        thinking_level: Some("low".to_string()),
+        ..Default::default()
+    });
 
     match gemini.create_interaction(&req).await {
         Ok(resp) => {

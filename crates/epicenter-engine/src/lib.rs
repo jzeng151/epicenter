@@ -597,7 +597,7 @@ Done!
         assert_eq!(normalized.strategies[0].id, "dup");
         assert_eq!(normalized.strategies[1].id, "dup-2");
         assert!(normalized.strategies[2].allow_caller_tests);
-        assert_eq!(normalized.shared_benchmark_spec.trials, 6);
+        assert_eq!(normalized.shared_benchmark_spec.trials, 3);
         assert_eq!(normalized.shared_benchmark_spec.command, "pytest -q");
         assert_eq!(normalized.shared_benchmark_spec.metric_unit, "ms");
     }
