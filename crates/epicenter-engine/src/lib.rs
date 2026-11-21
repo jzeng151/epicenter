@@ -765,6 +765,9 @@ Done!
         let auditor_cfg = auditor::auditor_generation_config();
         assert_eq!(auditor_cfg.thinking_level.as_deref(), Some("low"));
 
+        let feature_rg_cfg = red_gate::feature_red_gate_generation_config();
+        assert_eq!(feature_rg_cfg.thinking_level.as_deref(), Some("low"));
+
         // Stage 2 Bug Red-Gate: attempt 1 (Neon 1/2) uses low; attempt 2 & Carbon escalation use medium.
         assert_eq!(
             red_gate::bug_red_gate_generation_config(1)

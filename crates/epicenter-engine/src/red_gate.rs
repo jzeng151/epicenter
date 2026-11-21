@@ -194,12 +194,23 @@ async fn run_bug_red_gate(
         req.response_format = Some(ResponseFormat::json_schema(bug_red_gate_schema()));
         req.generation_config = bug_red_gate_generation_config(attempt_num);
 
-        let resp = match gemini.create_interaction(&req).await {
-            Ok(r) => r,
-            Err(err) => {
+        let resp = match tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            gemini.create_interaction(&req),
+        )
+        .await
+        {
+            Ok(Ok(r)) => r,
+            Ok(Err(err)) => {
                 last_diagnostic = format!("{label} API error: {err}");
                 last_output_tail.clear();
                 warn!(attempt = attempt_num, error = %err, "Red-Gate model call failed");
+                continue;
+            }
+            Err(_) => {
+                last_diagnostic = format!("{label} timed out after 60s");
+                last_output_tail.clear();
+                warn!(attempt = attempt_num, "Red-Gate model call timed out after 60s");
                 continue;
             }
         };
@@ -345,6 +356,13 @@ async fn run_feature_red_gate(
     let multimodal_block = format_multimodal_findings(&session.intake.multimodal_findings);
     let suggested_path = suggested_repro_path(prepared.runtime, &repo.file_tree);
     let default_cmd = prepared.default_test_command(Some(&suggested_path));
+    let focus_text = format!(
+        "{}\n{}\n{}\n{}",
+        session.intake.title,
+        session.intake.problem_statement,
+        session.intake.repro_steps.join("\n"),
+        multimodal_block
+    );
 
     let prompt = format!(
         "You are Stage 2 (Feature Acceptance Red-Gate) of the Epicenter engineering tournament.\n\
@@ -366,8 +384,8 @@ async fn run_feature_red_gate(
         session.intake.problem_statement,
         session.intake.repro_steps,
         session.intake.suspect_files,
-        repo.prompt_test_examples(&session.intake.suspect_files, 6_000),
-        repo.prompt_source_context(&session.intake.suspect_files, 30_000),
+        repo.prompt_test_examples(&session.intake.suspect_files, 4_000),
+        repo.prompt_focused_source_context(&session.intake.suspect_files, &focus_text, 14_000),
     );
 
     let mut req = CreateInteractionRequest::for_model(Gemini4Model::Carbon, prompt);
@@ -376,8 +394,14 @@ async fn run_feature_red_gate(
             .to_string(),
     );
     req.response_format = Some(ResponseFormat::json_schema(feature_red_gate_schema()));
+    req.generation_config = Some(feature_red_gate_generation_config());
 
-    if let Ok(resp) = gemini.create_interaction(&req).await {
+    if let Ok(Ok(resp)) = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        gemini.create_interaction(&req),
+    )
+    .await
+    {
         if let Ok(out) = extract_json_from_text::<FeatureRedGateOutput>(&resp.extract_text()) {
             let acc_path = if out.acceptance_test_path.trim().is_empty() {
                 suggested_path.clone()
@@ -436,6 +460,15 @@ pub(crate) fn bug_red_gate_generation_config(attempt_num: u8) -> Option<Generati
         thinking_level: Some(level.to_string()),
         ..Default::default()
     })
+}
+
+/// Fast reasoning depth for Stage 2 Feature Red-Gate contract synthesis (`"low"` thinking prevents
+/// default-high Carbon timeouts on large TypeScript/Python prompts).
+pub(crate) fn feature_red_gate_generation_config() -> GenerationConfig {
+    GenerationConfig {
+        thinking_level: Some("low".to_string()),
+        ..Default::default()
+    }
 }
 
 fn suggested_repro_path(runtime: RepoRuntime, file_tree: &[String]) -> String {

@@ -32,7 +32,7 @@ impl Default for GeminiClientConfig {
             base_url: DEFAULT_BASE_URL.to_string(),
             max_retries: 4,
             initial_backoff: Duration::from_millis(500),
-            request_timeout: Duration::from_secs(180),
+            request_timeout: Duration::from_secs(90),
         }
     }
 }
@@ -514,7 +514,14 @@ impl GeminiClient {
                 })
             }
             Err(err) => {
-                if (err.is_timeout() || err.is_connect()) && attempt < self.config.max_retries {
+                // Retry fast connect errors up to `max_retries`, but cap full request timeouts
+                // to a single retry so a slow model call can never hang a stage for 10+ minutes.
+                let retry_allowed = if err.is_timeout() {
+                    attempt == 0 && self.config.max_retries > 0
+                } else {
+                    err.is_connect() && attempt < self.config.max_retries
+                };
+                if retry_allowed {
                     let backoff = self.backoff_duration(attempt);
                     warn!(
                         error = %err,
