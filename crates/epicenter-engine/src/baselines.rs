@@ -1,10 +1,13 @@
 use crate::repo::{
     default_sandbox_allowlist, extract_unified_diff_from_text, normalize_clone_url, truncate_str,
+    RepoSnapshot,
 };
 use epicenter_common::{
     ExportBundleResponse, Gemini4Model, RedGateSpec, TournamentSession,
 };
-use epicenter_gemini::{CreateInteractionRequest, GeminiClient, InteractionEnvironment};
+use epicenter_gemini::{
+    CreateInteractionRequest, GeminiClient, GenerationConfig, InteractionEnvironment,
+};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::time::Duration;
@@ -26,14 +29,11 @@ pub async fn execute_single_model_baseline(
         return Ok(String::new());
     };
 
-    let mut source_context = String::new();
-    for (path, content) in repo_files {
-        let block = format!("--- FILE: {path} ---\n{content}\n\n");
-        if source_context.len() + block.len() > 36_000 {
-            break;
-        }
-        source_context.push_str(&block);
-    }
+    let snapshot = RepoSnapshot {
+        sources: repo_files.clone(),
+        ..Default::default()
+    };
+    let source_context = snapshot.prompt_focused_source_context(&[], problem_statement, 36_000);
 
     let prompt = format!(
         "You are solving a software engineering issue in a single shot.\n\
@@ -50,6 +50,10 @@ pub async fn execute_single_model_baseline(
         "Return a clean, minimal unified `git diff` solving the issue. Do not include commentary outside the diff block."
             .to_string(),
     );
+    req.generation_config = Some(GenerationConfig {
+        thinking_level: Some("medium".to_string()),
+        ..Default::default()
+    });
 
     let resp = client.create_interaction(&req).await?;
     Ok(extract_unified_diff_from_text(&resp.extract_text()))
