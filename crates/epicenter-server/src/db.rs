@@ -200,6 +200,53 @@ impl DbStore {
         Ok(())
     }
 
+    /// Loads a single attachment's metadata and raw bytes by UUID.
+    pub fn get_attachment(&self, id: Uuid) -> Result<Option<(AttachmentMeta, Vec<u8>)>> {
+        let conn = self.lock_conn()?;
+        let record = conn
+            .query_row(
+                "SELECT id, filename, mime_type, media_kind, size_bytes, file_uri, bytes FROM attachments WHERE id = ?1",
+                params![id.to_string()],
+                |row| {
+                    let id_str: String = row.get(0)?;
+                    let filename: String = row.get(1)?;
+                    let mime_type: String = row.get(2)?;
+                    let media_kind_str: String = row.get(3)?;
+                    let size_bytes: i64 = row.get(4)?;
+                    let file_uri: Option<String> = row.get(5)?;
+                    let bytes: Vec<u8> = row.get(6)?;
+                    Ok((
+                        id_str,
+                        filename,
+                        mime_type,
+                        media_kind_str,
+                        size_bytes,
+                        file_uri,
+                        bytes,
+                    ))
+                },
+            )
+            .optional()
+            .context("failed to fetch attachment")?;
+
+        Ok(record.map(
+            |(id_str, filename, mime_type, media_kind_str, size_bytes, file_uri, bytes)| {
+                let parsed_id = Uuid::parse_str(&id_str).unwrap_or(id);
+                let media_kind: MediaKind =
+                    serde_json::from_str(&media_kind_str).unwrap_or(MediaKind::Other);
+                let meta = AttachmentMeta {
+                    id: parsed_id,
+                    filename,
+                    mime_type,
+                    media_kind,
+                    size_bytes: size_bytes.max(0) as u64,
+                    file_uri,
+                };
+                (meta, bytes)
+            },
+        ))
+    }
+
     /// Loads attachment metadata and raw bytes for the requested attachment IDs (preserving input order).
     pub fn get_attachments_by_ids(&self, ids: &[Uuid]) -> Result<Vec<(AttachmentMeta, Vec<u8>)>> {
         if ids.is_empty() {
@@ -331,24 +378,34 @@ impl DbStore {
         }
     }
 
-    /// Returns the newest `FiveSigmaEval` from SQLite. If the table is empty, checks
-    /// `eval_runs/latest_five_sigma.json` on disk and seeds it into SQLite if found.
+    /// Returns the newest non-simulated `FiveSigmaEval` from SQLite. If the table is empty,
+    /// checks `eval_seed_path` on disk and only seeds/returns it when its label is NOT simulated.
+    /// Never presents dry-run, offline, seed, or simulated results as real evaluations.
     pub fn get_latest_eval_run_or_seed(&self) -> Result<Option<FiveSigmaEval>> {
-        let existing: Option<String> = {
+        let blobs: Vec<String> = {
             let conn = self.lock_conn()?;
-            conn.query_row(
-                "SELECT json_blob FROM eval_runs ORDER BY created_at DESC LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .context("failed to query latest eval_run")?
+            let mut stmt = conn
+                .prepare("SELECT json_blob FROM eval_runs ORDER BY created_at DESC")
+                .context("failed to prepare eval_runs query")?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .context("failed to query eval_runs")?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.context("failed to read eval_run row")?);
+            }
+            out
         };
 
-        if let Some(blob) = existing {
-            let eval: FiveSigmaEval =
-                serde_json::from_str(&blob).context("failed to deserialize latest eval_run")?;
-            return Ok(Some(eval));
+        if !blobs.is_empty() {
+            for blob in blobs {
+                let eval: FiveSigmaEval =
+                    serde_json::from_str(&blob).context("failed to deserialize eval_run")?;
+                if !is_simulated_eval_label(&eval.label) {
+                    return Ok(Some(eval));
+                }
+            }
+            return Ok(None);
         }
 
         if self.eval_seed_path.exists() {
@@ -364,6 +421,9 @@ impl DbStore {
                     self.eval_seed_path.display()
                 )
             })?;
+            if is_simulated_eval_label(&eval.label) {
+                return Ok(None);
+            }
             self.upsert_eval_run(&eval)?;
             return Ok(Some(eval));
         }
@@ -376,6 +436,16 @@ impl DbStore {
             .lock()
             .map_err(|_| anyhow::anyhow!("sqlite connection mutex poisoned"))
     }
+}
+
+/// Returns `true` when an evaluation run label indicates a dry-run, offline, seed, or simulated run
+/// that must never be surfaced as real live benchmark data.
+pub fn is_simulated_eval_label(label: &str) -> bool {
+    let lower = label.to_ascii_lowercase();
+    lower.contains("dry-run")
+        || lower.contains("offline")
+        || lower.contains("seed")
+        || lower.contains("simulated")
 }
 
 /// Infers `MediaKind` from a MIME content-type string.
