@@ -7,6 +7,7 @@ use epicenter_common::{
     ArmOutcome, AttachmentMeta, CalibrationFinding, CandidateResult, CreateSessionRequest, EvalArm,
     EvalIssueCase, EvalScorecard, EvalSplit, FiveSigmaEval, MediaKind, TaskKind,
 };
+use epicenter_engine::verifier::HostVerifier;
 use epicenter_engine::{EngineRunOptions, TournamentEngine, UploadedAttachmentBytes};
 use epicenter_gemini::GeminiClient;
 use futures::stream::{self, StreamExt};
@@ -359,7 +360,7 @@ async fn execute_live_arm_for_case(
 
     match arm {
         EvalArm::SingleModelCall => {
-            let repo_files = BTreeMap::new();
+            let repo_files = load_arm1_baseline_sources(case).await;
             match engine
                 .run_single_model_baseline(
                     &case.repo_url,
@@ -506,6 +507,51 @@ async fn execute_live_arm_for_case(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Loads real checked-out repository source files at `case.parent_commit` via `HostVerifier`
+/// so Arm 1 (`SingleModelCall`) receives genuine repository context instead of an empty map.
+/// Gracefully falls back to an empty `BTreeMap` if git checkout or snapshot loading fails.
+pub async fn load_arm1_baseline_sources(case: &EvalIssueCase) -> BTreeMap<String, String> {
+    let verifier = HostVerifier::new();
+    load_arm1_baseline_sources_with_verifier(&verifier, case).await
+}
+
+pub(crate) async fn load_arm1_baseline_sources_with_verifier(
+    verifier: &HostVerifier,
+    case: &EvalIssueCase,
+) -> BTreeMap<String, String> {
+    match verifier
+        .prepare_checkout(&case.repo_url, Some(&case.parent_commit), None)
+        .await
+    {
+        Ok(prepared) => match prepared.load_repo_snapshot(&[]).await {
+            Ok(snapshot) => {
+                info!(
+                    case_id = %case.id,
+                    files = snapshot.sources.len(),
+                    "loaded real checked-out repository source context for Arm 1 baseline"
+                );
+                snapshot.sources
+            }
+            Err(err) => {
+                warn!(
+                    case_id = %case.id,
+                    error = %err,
+                    "Arm 1 baseline repo snapshot failed; falling back to empty file map"
+                );
+                BTreeMap::new()
+            }
+        },
+        Err(err) => {
+            warn!(
+                case_id = %case.id,
+                error = %err,
+                "Arm 1 baseline repo checkout failed; falling back to empty file map"
+            );
+            BTreeMap::new()
         }
     }
 }
