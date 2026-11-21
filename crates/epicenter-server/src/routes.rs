@@ -81,7 +81,17 @@ impl IntoResponse for ApiError {
 pub fn build_router(state: AppState) -> Router {
     let dist_dir = std::env::var("EPICENTER_WEB_DIST")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("crates/epicenter-web/dist"));
+        .unwrap_or_else(|_| {
+            let root_dist = PathBuf::from("dist");
+            let crate_dist = PathBuf::from("crates/epicenter-web/dist");
+            if root_dist.join("index.html").exists() {
+                root_dist
+            } else if crate_dist.join("index.html").exists() {
+                crate_dist
+            } else {
+                root_dist
+            }
+        });
     build_router_with_dist(state, dist_dir)
 }
 
