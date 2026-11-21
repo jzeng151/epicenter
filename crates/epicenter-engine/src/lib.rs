@@ -765,26 +765,154 @@ Done!
         let auditor_cfg = auditor::auditor_generation_config();
         assert_eq!(auditor_cfg.thinking_level.as_deref(), Some("low"));
 
-        // Stage 2 Bug Red-Gate: attempt 1 (Neon 1/2) uses low; attempt 2 & Carbon escalation escalate.
+        // Stage 2 Bug Red-Gate: attempt 1 (Neon 1/2) uses low; attempt 2 & Carbon escalation use medium.
         assert_eq!(
             red_gate::bug_red_gate_generation_config(1)
                 .and_then(|c| c.thinking_level)
                 .as_deref(),
             Some("low")
         );
-        assert!(red_gate::bug_red_gate_generation_config(2).is_none());
-        assert!(red_gate::bug_red_gate_generation_config(3).is_none());
+        assert_eq!(
+            red_gate::bug_red_gate_generation_config(2)
+                .and_then(|c| c.thinking_level)
+                .as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            red_gate::bug_red_gate_generation_config(3)
+                .and_then(|c| c.thinking_level)
+                .as_deref(),
+            Some("medium")
+        );
 
-        // Stage 4 workers: loop 1 regular Neon uses low; retry loops & 0/K Carbon rescue escalate.
+        // Stage 4 workers: loop 1 regular Neon uses low; retry loops & 0/K Carbon rescue use medium.
         assert_eq!(
             workers::worker_generation_config(1, false)
                 .and_then(|c| c.thinking_level)
                 .as_deref(),
             Some("low")
         );
-        assert!(workers::worker_generation_config(2, false).is_none());
-        assert!(workers::worker_generation_config(3, false).is_none());
-        assert!(workers::worker_generation_config(1, true).is_none());
-        assert!(workers::worker_generation_config(2, true).is_none());
+        assert_eq!(
+            workers::worker_generation_config(2, false)
+                .and_then(|c| c.thinking_level)
+                .as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            workers::worker_generation_config(3, false)
+                .and_then(|c| c.thinking_level)
+                .as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            workers::worker_generation_config(1, true)
+                .and_then(|c| c.thinking_level)
+                .as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            workers::worker_generation_config(2, true)
+                .and_then(|c| c.thinking_level)
+                .as_deref(),
+            Some("medium")
+        );
+    }
+
+    #[test]
+    fn runtime_regression_filter_excludes_static_typing_and_init_files() {
+        use crate::verifier::{is_runtime_regression_test, RepoRuntime};
+
+        // Python: must accept pytest-discoverable test modules only.
+        assert!(is_runtime_regression_test(
+            RepoRuntime::Python,
+            "tests/test_options.py"
+        ));
+        assert!(is_runtime_regression_test(
+            RepoRuntime::Python,
+            "tests/test_exceptions/test_FileError.py"
+        ));
+        assert!(is_runtime_regression_test(
+            RepoRuntime::Python,
+            "tests/envvar_test.py"
+        ));
+        // Must reject mypy typing files, __init__.py, conftest.py, fixtures, and benchmarks.
+        assert!(!is_runtime_regression_test(
+            RepoRuntime::Python,
+            "tests/typing/typing_confirmation_option.py"
+        ));
+        assert!(!is_runtime_regression_test(
+            RepoRuntime::Python,
+            "tests/typing/typing_group_kw_options.py"
+        ));
+        assert!(!is_runtime_regression_test(
+            RepoRuntime::Python,
+            "tests/test_exceptions/__init__.py"
+        ));
+        assert!(!is_runtime_regression_test(
+            RepoRuntime::Python,
+            "tests/conftest.py"
+        ));
+        assert!(!is_runtime_regression_test(
+            RepoRuntime::Python,
+            "tests/fixtures/helper.py"
+        ));
+
+        // NodeTs: must accept .test./.spec. files and reject .d.ts / helpers.
+        assert!(is_runtime_regression_test(
+            RepoRuntime::NodeTs,
+            "src/router.test.ts"
+        ));
+        assert!(is_runtime_regression_test(
+            RepoRuntime::NodeTs,
+            "tests/client.spec.tsx"
+        ));
+        assert!(!is_runtime_regression_test(
+            RepoRuntime::NodeTs,
+            "tests/types.d.ts"
+        ));
+        assert!(!is_runtime_regression_test(
+            RepoRuntime::NodeTs,
+            "tests/helpers/mock_server.ts"
+        ));
+    }
+
+    #[test]
+    fn focused_source_context_extracts_deep_verbatim_methods_from_160kb_file() {
+        // Synthesize a 160 KB Python file (similar to pallets/click's 150 KB src/click/core.py)
+        // with the target buggy method located near line 2600.
+        let mut big_file = String::from("import os\nimport typing as t\n\nclass Base:\n    pass\n");
+        for i in 0..2500 {
+            big_file.push_str(&format!(
+                "def filler_helper_{i:04}(x: int) -> int:\n    return x + {i}\n"
+            ));
+        }
+        big_file.push_str(
+            "class Option:\n\
+             \x20   def get_help_extra(self, ctx) -> dict[str, str]:\n\
+             \x20       if self.show_envvar and self.envvar is not None:\n\
+             \x20           return {\"envvar\": \", \".join(self.envvar)}\n\
+             \x20       return {}\n",
+        );
+        assert!(big_file.len() > 140_000);
+        assert!(big_file.len() <= crate::repo::MAX_FILE_BYTES);
+
+        let mut sources = BTreeMap::new();
+        sources.insert("src/click/core.py".to_string(), big_file);
+        let snap = crate::repo::RepoSnapshot {
+            sources,
+            ..Default::default()
+        };
+
+        let ctx = snap.prompt_focused_source_context(
+            &["src/click/core.py".to_string()],
+            "Option.get_help_extra fails when self.show_envvar receives a tuple envvar",
+            12_000,
+        );
+        assert!(
+            ctx.contains("def get_help_extra(self, ctx) -> dict[str, str]:"),
+            "focused source context must preserve verbatim method near bottom of large file"
+        );
+        assert!(ctx.contains("if self.show_envvar and self.envvar is not None:"));
+        assert!(ctx.len() <= 13_000);
     }
 }

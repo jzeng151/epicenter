@@ -37,6 +37,16 @@ pub async fn run_planner_stage(
     );
 
     let multimodal_block = format_multimodal_findings(&session.intake.multimodal_findings);
+    let focus_text = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        session.intake.title,
+        session.intake.problem_statement,
+        session.intake.repro_steps.join("\n"),
+        multimodal_block,
+        red_gate.patch()
+    );
+    let focused_sources =
+        repo.prompt_focused_source_context(&session.intake.suspect_files, &focus_text, 36_000);
 
     let prompt = format!(
         "You are Stage 3 (Dynamic-K Orthogonal Strategy Architect) of the Epicenter tournament.\n\
@@ -77,7 +87,7 @@ pub async fn run_planner_stage(
         session.intake.suspect_files,
         red_gate.test_command(),
         red_gate.locked_test_path(),
-        repo.prompt_source_context(&session.intake.suspect_files, 36_000),
+        focused_sources,
     );
 
     let mut req = CreateInteractionRequest::for_model(Gemini4Model::Carbon, prompt);

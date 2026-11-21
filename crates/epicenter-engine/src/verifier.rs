@@ -1833,28 +1833,10 @@ impl PreparedRepo {
             }
         }
 
-        let is_runtime_test = |path: &str| -> bool {
-            if excluded.contains(path) || !is_test_like_path(path) {
-                return false;
-            }
-            match self.runtime {
-                RepoRuntime::Python => path.ends_with(".py") && !path.ends_with("conftest.py"),
-                RepoRuntime::NodeTs => {
-                    path.ends_with(".ts")
-                        || path.ends_with(".tsx")
-                        || path.ends_with(".js")
-                        || path.ends_with(".jsx")
-                        || path.ends_with(".mjs")
-                        || path.ends_with(".cjs")
-                }
-                _ => false,
-            }
-        };
-
         let all_repo_tests: Vec<&String> = self
             .file_tree
             .iter()
-            .filter(|p| is_runtime_test(p))
+            .filter(|p| !excluded.contains(p.as_str()) && is_runtime_regression_test(self.runtime, p))
             .collect();
 
         let mut selected: Vec<String> = Vec::new();
@@ -2641,10 +2623,98 @@ fn apply_text_replacement(
         }
     }
 
+    // Provide a verbatim nearby snippet from the real file when a line anchor exists so retry loops
+    // never have to guess exact indentation or context.
+    let anchor = old_lines
+        .iter()
+        .map(|l| l.trim())
+        .find(|l| l.len() >= 8)
+        .or_else(|| old_lines.first().map(|l| l.trim()))
+        .unwrap_or("");
+    let hint = if !anchor.is_empty() {
+        orig_lines
+            .iter()
+            .position(|l| l.trim().contains(anchor))
+            .map(|idx| {
+                let s = idx.saturating_sub(2);
+                let e = (idx + 10).min(orig_lines.len());
+                format!(
+                    "\nClosest verbatim snippet in file (lines {}-{}):\n{}",
+                    s + 1,
+                    e,
+                    orig_lines[s..e].join("\n")
+                )
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
     Err(format!(
-        "old_text not found verbatim in file (first line: {:?})",
+        "old_text not found verbatim in file (first line: {:?}){hint}",
         old_text.lines().next().unwrap_or("")
     ))
+}
+
+/// Strictly filters repository files to genuine runtime-executable regression tests so
+/// static type-checking scripts (e.g. `tests/typing/typing_*.py`), package initializers
+/// (`tests/.../__init__.py`), fixtures, and benchmarks are never passed directly to `pytest`
+/// or `vitest`/`jest`.
+pub(crate) fn is_runtime_regression_test(runtime: RepoRuntime, path: &str) -> bool {
+    let norm = normalize_rel_path(path);
+    if !is_test_like_path(&norm) {
+        return false;
+    }
+    let lower = norm.to_ascii_lowercase();
+    let file = lower.rsplit('/').next().unwrap_or(&lower);
+
+    // Exclude static type-check suites, benchmarks, fixtures, docs, and helper directories.
+    const EXCLUDED_DIRS: &[&str] = &[
+        "typing/",
+        "/typing/",
+        "typecheck/",
+        "/typecheck/",
+        "type_checks/",
+        "/type_checks/",
+        "mypy/",
+        "/mypy/",
+        "benchmarks/",
+        "/benchmarks/",
+        "bench/",
+        "/bench/",
+        "fixtures/",
+        "/fixtures/",
+        "helpers/",
+        "/helpers/",
+        "docs/",
+        "/docs/",
+    ];
+    if EXCLUDED_DIRS.iter().any(|seg| lower.contains(seg)) {
+        return false;
+    }
+
+    match runtime {
+        RepoRuntime::Python => {
+            if !lower.ends_with(".py") || file == "__init__.py" || file == "conftest.py" {
+                return false;
+            }
+            // Match pytest's default test module discovery convention.
+            file.starts_with("test_") || file.ends_with("_test.py")
+        }
+        RepoRuntime::NodeTs => {
+            if lower.ends_with(".d.ts") {
+                return false;
+            }
+            let has_js_ext = lower.ends_with(".ts")
+                || lower.ends_with(".tsx")
+                || lower.ends_with(".js")
+                || lower.ends_with(".jsx")
+                || lower.ends_with(".mjs")
+                || lower.ends_with(".cjs");
+            has_js_ext && (file.contains(".test.") || file.contains(".spec."))
+        }
+        _ => false,
+    }
 }
 
 fn detect_broken_test_or_env_error(

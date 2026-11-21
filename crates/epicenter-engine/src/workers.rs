@@ -202,7 +202,14 @@ async fn execute_single_worker(
             combined_hints.push(s.clone());
         }
     }
-    let source_context = repo.prompt_source_context(&combined_hints, 36_000);
+    let focus_text = format!(
+        "{issue_title}\n{problem_statement}\n{}\n{multimodal_block}\n{}\n{}\n{}",
+        repro_steps.join("\n"),
+        strategy.title,
+        strategy.thesis,
+        red_gate.patch()
+    );
+    let source_context = repo.prompt_focused_source_context(&combined_hints, &focus_text, 40_000);
 
     let caller_test_rule = if strategy.allow_caller_tests {
         "CALLER TESTS ALLOWED: Add targeted regression tests for Ring 1 callers in a separate file via `new_files` (NEVER editing the locked Red-Gate test) to eliminate untested dark zones."
@@ -554,6 +561,15 @@ async fn design_carbon_rescue_strategy(
         .collect::<Vec<_>>()
         .join("\n---\n");
 
+    let focus_text = format!(
+        "{}\n{}\n{multimodal_block}\n{}\n{failure_digest}",
+        session.intake.title,
+        session.intake.problem_statement,
+        red_gate.patch()
+    );
+    let focused_sources =
+        repo.prompt_focused_source_context(&session.intake.suspect_files, &focus_text, 28_000);
+
     let prompt = format!(
         "All {} initial tournament strategies failed independent host verification on '{}'.\n\
          Diagnose WHY every attempt failed from the real host test logs below and design ONE surgical,\n\
@@ -570,7 +586,7 @@ async fn design_carbon_rescue_strategy(
         session.intake.problem_statement,
         red_gate.test_command(),
         failure_digest,
-        repo.prompt_source_context(&session.intake.suspect_files, 24_000),
+        focused_sources,
     );
 
     let mut req = CreateInteractionRequest::for_model(Gemini4Model::Carbon, prompt);
@@ -579,6 +595,10 @@ async fn design_carbon_rescue_strategy(
             .to_string(),
     );
     req.response_format = Some(ResponseFormat::json_schema(rescue_strategy_schema()));
+    req.generation_config = Some(GenerationConfig {
+        thinking_level: Some("medium".to_string()),
+        ..Default::default()
+    });
 
     if let Ok(resp) = gemini.create_interaction(&req).await {
         if let Ok(mut spec) = extract_json_from_text::<StrategySpec>(&resp.extract_text()) {
@@ -609,20 +629,21 @@ async fn design_carbon_rescue_strategy(
 /// Adaptive reasoning depth for Stage 4 parallel workers:
 /// - Loop 1 on regular parallel `Neon` workers (`iter == 1 && !is_rescue_candidate`): `"low"`
 ///   thinking for fast first-pass patch synthesis.
-/// - Retry loops (`iter >= 2`) and `0/K` `Carbon` rescue candidates: `None` (default deeper
-///   thinking) so tough retries and rescue fixes automatically think deeper.
+/// - Retry loops (`iter >= 2`) and `0/K` `Carbon` rescue candidates: `"medium"` thinking so
+///   retries and rescue fixes escalate reasoning depth without hitting 90s+ default-high stalls.
 pub(crate) fn worker_generation_config(
     iter: u8,
     is_rescue_candidate: bool,
 ) -> Option<GenerationConfig> {
-    if iter == 1 && !is_rescue_candidate {
-        Some(GenerationConfig {
-            thinking_level: Some("low".to_string()),
-            ..Default::default()
-        })
+    let level = if iter == 1 && !is_rescue_candidate {
+        "low"
     } else {
-        None
-    }
+        "medium"
+    };
+    Some(GenerationConfig {
+        thinking_level: Some(level.to_string()),
+        ..Default::default()
+    })
 }
 
 fn worker_edit_schema() -> serde_json::Value {

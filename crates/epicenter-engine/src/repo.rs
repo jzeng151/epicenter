@@ -9,7 +9,9 @@ use uuid::Uuid;
 /// Maximum number of source files fetched over GitHub raw content API per tournament session.
 const MAX_FETCHED_FILES: usize = 45;
 /// Maximum byte size of an individual source file fetched into memory.
-pub(crate) const MAX_FILE_BYTES: usize = 120_000;
+/// Set to 350 KB so large core modules (e.g. `src/click/core.py` at ~150 KB,
+/// `pydantic/main.py`, `werkzeug/wrappers/request.py`) are never silently skipped.
+pub(crate) const MAX_FILE_BYTES: usize = 350_000;
 /// Maximum number of file tree entries forwarded to LLM prompts.
 pub const MAX_TREE_PROMPT_ENTRIES: usize = 250;
 
@@ -73,6 +75,20 @@ impl RepoSnapshot {
 
     /// Formats the most relevant source files (prioritizing `suspect_files`) into a bounded prompt excerpt.
     pub fn prompt_source_context(&self, suspect_files: &[String], max_chars: usize) -> String {
+        self.prompt_focused_source_context(suspect_files, "", max_chars)
+    }
+
+    /// Formats the most relevant source files (prioritizing `suspect_files`) into a bounded prompt
+    /// excerpt. When a prioritized file exceeds its character budget (e.g. a 150 KB core module),
+    /// extracts verbatim keyword-matched line windows (`±35` lines) around terms from `focus_text`
+    /// plus the file header so workers always see the exact lines they need to edit without
+    /// cutting off methods near the bottom of large files.
+    pub fn prompt_focused_source_context(
+        &self,
+        suspect_files: &[String],
+        focus_text: &str,
+        max_chars: usize,
+    ) -> String {
         if self.sources.is_empty() {
             return "(no source files fetched)".to_string();
         }
@@ -100,18 +116,43 @@ impl RepoSnapshot {
             }
         }
 
+        let keywords = extract_focus_keywords(focus_text);
+        let suspect_count = suspect_files.len().max(1);
+        let per_large_file_cap = if suspect_count > 1 {
+            (max_chars * 2 / 3).max(16_000)
+        } else {
+            max_chars
+        };
+
         let mut buf = String::new();
         for (path, content) in ordered {
-            let section = format!("--- FILE: {path} ---\n{content}\n\n");
-            if buf.len() + section.len() > max_chars {
-                let remaining = max_chars.saturating_sub(buf.len());
-                if remaining > 200 {
-                    buf.push_str(&truncate_str(&section, remaining));
-                    buf.push_str("\n...(truncated)\n");
-                }
+            let remaining = max_chars.saturating_sub(buf.len());
+            if remaining <= 300 {
                 break;
             }
-            buf.push_str(&section);
+            let header = format!("--- FILE: {path} ---\n");
+            let full_len = header.len() + content.len() + 2;
+            if full_len <= remaining && full_len <= per_large_file_cap {
+                buf.push_str(&header);
+                buf.push_str(content);
+                buf.push_str("\n\n");
+                continue;
+            }
+
+            let file_budget = remaining.min(per_large_file_cap).saturating_sub(header.len() + 4);
+            if file_budget < 250 {
+                break;
+            }
+            let excerpt = if !keywords.is_empty() && content.len() > file_budget {
+                extract_keyword_windows(content, &keywords, file_budget)
+            } else {
+                let mut s = truncate_str(content, file_budget);
+                s.push_str("\n...(truncated)");
+                s
+            };
+            buf.push_str(&header);
+            buf.push_str(&excerpt);
+            buf.push_str("\n\n");
         }
         buf
     }
@@ -757,4 +798,171 @@ pub fn default_sandbox_allowlist() -> Vec<String> {
         "proxy.golang.org".into(),
         "sum.golang.org".into(),
     ]
+}
+
+const FOCUS_STOPWORDS: &[&str] = &[
+    "about", "after", "again", "against", "all", "also", "and", "any", "are", "assert", "async",
+    "await", "base", "because", "been", "before", "being", "between", "both", "case", "class",
+    "code", "command", "commit", "const", "could", "data", "default", "dict", "diff", "does",
+    "each", "elif", "else", "empty", "error", "except", "expected", "export", "fail", "failed",
+    "failure", "false", "file", "files", "fix", "fixes", "fixed", "from", "function", "have",
+    "head", "here", "import", "index", "input", "instead", "interface", "into", "issue", "item",
+    "items", "just", "keep", "line", "lines", "list", "make", "method", "mode", "more", "most",
+    "must", "name", "need", "needs", "none", "null", "object", "only", "other", "output", "pass",
+    "passed", "patch", "path", "print", "private", "problem", "public", "pytest", "python",
+    "raise", "read", "real", "repo", "repro", "result", "return", "returns", "root", "same",
+    "self", "should", "show", "some", "source", "spec", "static", "step", "steps", "still",
+    "strategy", "string", "such", "suite", "test", "tests", "text", "than", "that", "their",
+    "them", "then", "there", "these", "they", "this", "through", "true", "tuple", "type",
+    "undefined", "used", "using", "value", "values", "very", "void", "what", "when", "where",
+    "which", "while", "will", "with", "without", "work", "would", "write",
+];
+
+fn extract_focus_keywords(focus_text: &str) -> Vec<String> {
+    if focus_text.trim().is_empty() {
+        return Vec::new();
+    }
+    let stopwords: std::collections::HashSet<&str> = FOCUS_STOPWORDS.iter().copied().collect();
+    let mut counts: std::collections::HashMap<String, (i32, usize)> =
+        std::collections::HashMap::new();
+
+    for raw in focus_text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+        let trimmed = raw.trim_matches('_');
+        if trimmed.len() < 4 || trimmed.len() > 64 {
+            continue;
+        }
+        if trimmed.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if stopwords.contains(lower.as_str()) {
+            continue;
+        }
+        let has_underscore = trimmed.contains('_');
+        let has_inner_upper = trimmed.chars().skip(1).any(|c| c.is_ascii_uppercase());
+        let signal_bonus = if has_underscore {
+            6
+        } else if has_inner_upper {
+            4
+        } else {
+            1
+        };
+        let entry = counts.entry(lower).or_insert((signal_bonus, 0));
+        entry.1 += 1;
+    }
+
+    let mut ranked: Vec<(i32, String)> = counts
+        .into_iter()
+        .map(|(kw, (bonus, freq))| (bonus * 10 + (freq.min(6) as i32), kw))
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    ranked.into_iter().take(24).map(|(_, kw)| kw).collect()
+}
+
+fn extract_keyword_windows(content: &str, keywords: &[String], budget: usize) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut line_scores: Vec<(i32, usize)> = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        let lower = line.to_ascii_lowercase();
+        let mut score = 0i32;
+        for kw in keywords {
+            if lower.contains(kw.as_str()) {
+                score += if kw.contains('_') { 4 } else { 2 };
+            }
+        }
+        if score > 0 {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("def ")
+                || trimmed.starts_with("async def ")
+                || trimmed.starts_with("class ")
+                || trimmed.starts_with("function ")
+                || trimmed.starts_with("export ")
+            {
+                score += 4;
+            }
+            line_scores.push((score, idx));
+        }
+    }
+
+    if line_scores.is_empty() {
+        let mut s = truncate_str(content, budget);
+        s.push_str("\n...(truncated)");
+        return s;
+    }
+
+    // Sort highest-scoring lines first, breaking ties by earlier line order.
+    line_scores.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+    let n = lines.len();
+    let header_end = n.min(45);
+    let mut windows: Vec<(usize, usize)> = vec![(0, header_end)];
+    let mut used_chars: usize = lines[0..header_end].iter().map(|l| l.len() + 1).sum();
+
+    for &(_, hit) in &line_scores {
+        if used_chars >= budget.saturating_sub(400) {
+            break;
+        }
+        let start = hit.saturating_sub(28);
+        let end = (hit + 42).min(n);
+
+        // Skip if hit line is already covered well within an existing window.
+        if windows.iter().any(|&(ws, we)| hit >= ws + 4 && hit + 4 < we) {
+            continue;
+        }
+
+        // Estimate incremental characters added by this window (excluding already-covered lines).
+        let mut add_chars = 40usize;
+        for (line_idx, line) in lines.iter().enumerate().take(end).skip(start) {
+            if !windows.iter().any(|&(ws, we)| line_idx >= ws && line_idx < we) {
+                add_chars += line.len() + 1;
+            }
+        }
+        if used_chars + add_chars > budget {
+            continue;
+        }
+        windows.push((start, end));
+        used_chars += add_chars;
+    }
+
+    // Sort and merge overlapping / adjacent windows.
+    windows.sort_by_key(|&(s, _)| s);
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (s, e) in windows {
+        if let Some(last) = merged.last_mut() {
+            if s <= last.1 + 3 {
+                last.1 = last.1.max(e);
+                continue;
+            }
+        }
+        merged.push((s, e));
+    }
+
+    let mut out = String::with_capacity(budget.min(content.len()));
+    let mut prev_end = 0usize;
+    for (ws, we) in merged {
+        if ws > prev_end {
+            out.push_str(&format!(
+                "... [lines {}-{} omitted] ...\n",
+                prev_end + 1,
+                ws
+            ));
+        }
+        for line in &lines[ws..we] {
+            out.push_str(line);
+            out.push('\n');
+        }
+        prev_end = we;
+    }
+    if prev_end < n {
+        out.push_str(&format!(
+            "... [lines {}-{} omitted] ...",
+            prev_end + 1,
+            n
+        ));
+    }
+    out
 }
