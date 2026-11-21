@@ -1,6 +1,7 @@
 pub mod db;
 pub mod github;
 pub mod live_judge;
+pub mod media;
 pub mod routes;
 pub mod state;
 

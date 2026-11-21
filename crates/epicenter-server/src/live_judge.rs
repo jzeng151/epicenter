@@ -1,16 +1,93 @@
-use crate::github::{parse_unified_diff, FetchedPrContext};
+use crate::db::infer_media_kind;
+use crate::github::{
+    parse_github_repo_url, parse_unified_diff as parse_github_diff, FetchedPrContext,
+};
+use crate::media::TempDirGuard;
 use crate::state::AppState;
 use anyhow::Result;
 use chrono::Utc;
 use epicenter_common::{
-    ArmOutcome, CreateSessionRequest, EvalArm, EvalIssueCase, EvalScorecard, EvalSplit,
-    FiveSigmaEval, LiveJudgePrRequest, LiveJudgePrResponse, TaskKind,
+    ArmOutcome, AttachmentMeta, BlastRadiusReport, CreateSessionRequest, EvalArm, EvalIssueCase,
+    EvalScorecard, EvalSplit, FiveSigmaEval, LiveJudgePrRequest, LiveJudgePrResponse, TaskKind,
 };
-use epicenter_engine::{EngineRunOptions, TournamentEngine};
-use epicenter_graph::{BlastAnalysisConfig, RepoCallGraph};
-use std::collections::HashSet;
-use std::time::Instant;
+use epicenter_engine::{EngineRunOptions, TournamentEngine, UploadedAttachmentBytes};
+use epicenter_graph::{
+    normalize_rel_path, parse_unified_diff as parse_graph_diff, BlastAnalysisConfig, RepoCallGraph,
+};
+use futures::StreamExt;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+use tokio::process::Command;
+use tokio::sync::Mutex as AsyncMutex;
+use tracing::{info, warn};
 use uuid::Uuid;
+
+/// Default host cache directory for cloned bare/no-checkout git mirrors.
+pub const DEFAULT_REPO_CACHE_ROOT: &str = "/tmp/epicenter-cache/repos";
+
+const GIT_CLONE_TIMEOUT_SECS: u64 = 120;
+const ENV_SETUP_TIMEOUT_SECS: u64 = 120;
+const TEST_EXEC_TIMEOUT_SECS: u64 = 60;
+const MEDIA_DOWNLOAD_TIMEOUT_SECS: u64 = 15;
+const MAX_MEDIA_DOWNLOAD_BYTES: usize = 15 * 1024 * 1024;
+const MAX_MEDIA_ATTACHMENTS: usize = 6;
+
+/// Independent host verification verdict for a candidate patch evaluated against a PR's
+/// hidden `ground_truth_test_patch` and module regression suite.
+#[derive(Debug, Clone)]
+pub struct HostVerificationResult {
+    pub patch_applied: bool,
+    pub ground_truth_patch_applied: bool,
+    pub resolved_ground_truth: bool,
+    pub regression_free: bool,
+    pub test_tampering: bool,
+    pub blast_radius: Option<BlastRadiusReport>,
+    pub failure_category: Option<String>,
+    pub diagnostic_tail: String,
+}
+
+#[derive(Debug, Clone)]
+struct CmdOutput {
+    exit_code: Option<i32>,
+    timed_out: bool,
+    stdout: String,
+    stderr: String,
+}
+
+impl CmdOutput {
+    fn success(&self) -> bool {
+        !self.timed_out && self.exit_code == Some(0)
+    }
+
+    fn combined_tail(&self, max_chars: usize) -> String {
+        let mut combined = String::new();
+        if !self.stdout.trim().is_empty() {
+            combined.push_str(self.stdout.trim());
+        }
+        if !self.stderr.trim().is_empty() {
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(self.stderr.trim());
+        }
+        if self.timed_out {
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str("[timed out]");
+        }
+        truncate_tail(&combined, max_chars)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepoLanguage {
+    Python,
+    TypeScriptJavaScript,
+    Unknown,
+}
 
 /// Executes a live 3-way comparison (`SingleModelCall`, `SingleManagedAgent`, `EpicenterTournament`)
 /// against any merged GitHub Pull Request and persists the resulting `FiveSigmaEval` in SQLite.
@@ -24,7 +101,8 @@ pub async fn run_live_judge_pr(
     Ok(LiveJudgePrResponse { eval })
 }
 
-/// Evaluates an already-fetched GitHub PR context across all 3 arms.
+/// Evaluates an already-fetched GitHub PR context across all 3 arms using real independent
+/// host-side verification (`git apply` + hidden `ground_truth_test_patch` + real test execution).
 pub async fn evaluate_fetched_pr(
     state: &AppState,
     ctx: FetchedPrContext,
@@ -49,49 +127,14 @@ pub async fn evaluate_fetched_pr(
         split: EvalSplit::LiveJudge,
     };
 
-    let graph = RepoCallGraph::from_sources(&ctx.base_source_files);
-    let blast_cfg = BlastAnalysisConfig::default();
-    let expected_files: HashSet<&str> = ctx
-        .modified_source_files
-        .iter()
-        .map(String::as_str)
-        .collect();
-
     // Arm 1: Single Model Call
-    let arm1_outcome = run_arm1_single_model(
-        state,
-        &case_id,
-        &ctx,
-        &problem_statement,
-        &graph,
-        &blast_cfg,
-        &expected_files,
-    )
-    .await;
+    let arm1_outcome = run_arm1_single_model(state, &case_id, &ctx, &problem_statement).await;
 
     // Arm 2: Single Managed Agent
-    let arm2_outcome = run_arm2_single_agent(
-        state,
-        &case_id,
-        &ctx,
-        &problem_statement,
-        &graph,
-        &blast_cfg,
-        &expected_files,
-    )
-    .await;
+    let arm2_outcome = run_arm2_single_agent(state, &case_id, &ctx, &problem_statement).await;
 
     // Arm 3: Epicenter Tournament
-    let arm3_outcome = run_arm3_tournament(
-        state,
-        &case_id,
-        &ctx,
-        &problem_statement,
-        &graph,
-        &blast_cfg,
-        &expected_files,
-    )
-    .await;
+    let arm3_outcome = run_arm3_tournament(state, &case_id, &ctx, &problem_statement).await;
 
     let cases = vec![issue_case];
     let outcomes = vec![arm1_outcome, arm2_outcome, arm3_outcome];
@@ -99,7 +142,7 @@ pub async fn evaluate_fetched_pr(
 
     let mut remaining_failure_modes = Vec::new();
     for outcome in &outcomes {
-        if !outcome.resolved_ground_truth {
+        if !outcome.resolved_ground_truth || !outcome.regression_free {
             if let Some(cat) = &outcome.failure_category {
                 remaining_failure_modes.push(format!("{}: {cat}", outcome.arm.label()));
             }
@@ -126,9 +169,6 @@ async fn run_arm1_single_model(
     case_id: &str,
     ctx: &FetchedPrContext,
     problem_statement: &str,
-    graph: &RepoCallGraph,
-    blast_cfg: &BlastAnalysisConfig,
-    expected_files: &HashSet<&str>,
 ) -> ArmOutcome {
     let start = Instant::now();
     match state
@@ -142,16 +182,22 @@ async fn run_arm1_single_model(
         .await
     {
         Ok(diff) => {
+            let verdict = verify_candidate_on_host(
+                &ctx.repo_url,
+                &ctx.parent_commit,
+                &diff,
+                &ctx.ground_truth_test_patch,
+            )
+            .await;
             let duration_ms = start.elapsed().as_millis() as u64;
-            score_baseline_diff(
+            outcome_from_verdict(
                 case_id,
                 EvalArm::SingleModelCall,
-                &diff,
+                verdict,
                 duration_ms,
-                graph,
-                blast_cfg,
-                expected_files,
-                42.0,
+                None,
+                None,
+                None,
             )
         }
         Err(err) => ArmOutcome {
@@ -175,9 +221,6 @@ async fn run_arm2_single_agent(
     case_id: &str,
     ctx: &FetchedPrContext,
     problem_statement: &str,
-    graph: &RepoCallGraph,
-    blast_cfg: &BlastAnalysisConfig,
-    expected_files: &HashSet<&str>,
 ) -> ArmOutcome {
     let start = Instant::now();
     match state
@@ -190,16 +233,22 @@ async fn run_arm2_single_agent(
         .await
     {
         Ok(diff) => {
+            let verdict = verify_candidate_on_host(
+                &ctx.repo_url,
+                &ctx.parent_commit,
+                &diff,
+                &ctx.ground_truth_test_patch,
+            )
+            .await;
             let duration_ms = start.elapsed().as_millis() as u64;
-            score_baseline_diff(
+            outcome_from_verdict(
                 case_id,
                 EvalArm::SingleManagedAgent,
-                &diff,
+                verdict,
                 duration_ms,
-                graph,
-                blast_cfg,
-                expected_files,
-                64.0,
+                None,
+                None,
+                None,
             )
         }
         Err(err) => ArmOutcome {
@@ -223,11 +272,16 @@ async fn run_arm3_tournament(
     case_id: &str,
     ctx: &FetchedPrContext,
     problem_statement: &str,
-    graph: &RepoCallGraph,
-    blast_cfg: &BlastAnalysisConfig,
-    expected_files: &HashSet<&str>,
 ) -> ArmOutcome {
     let start = Instant::now();
+
+    // Download reachable PR media URLs (15s timeout, max 15MB) and pass them as real multimodal attachments.
+    let uploaded_attachments = download_pr_media_attachments(&ctx.media_urls).await;
+    let attachment_metas: Vec<AttachmentMeta> = uploaded_attachments
+        .iter()
+        .map(|a| a.meta.clone())
+        .collect();
+
     let session_req = CreateSessionRequest {
         repo_url: ctx.repo_url.clone(),
         commit_sha: Some(ctx.parent_commit.clone()),
@@ -236,20 +290,20 @@ async fn run_arm3_tournament(
         title: Some(ctx.title.clone()),
         problem_statement: problem_statement.to_string(),
         attachment_ids: Vec::new(),
-        attachments: Vec::new(),
+        attachments: attachment_metas,
     };
     let initial = TournamentEngine::initialize_session(&session_req);
-    let mut opts = EngineRunOptions::default();
-    opts.synthesize_tts = false;
-    opts.github_token = state.github.token().map(str::to_string);
+    let opts = EngineRunOptions {
+        synthesize_tts: false,
+        github_token: state.github.token().map(str::to_string),
+    };
 
     match state
         .engine
-        .execute_session(initial, Vec::new(), opts, None)
+        .execute_session(initial, uploaded_attachments, opts, None)
         .await
     {
         Ok(output) => {
-            let duration_ms = start.elapsed().as_millis() as u64;
             let recommended_id = output
                 .session
                 .arena_summary
@@ -277,50 +331,43 @@ async fn run_arm3_tournament(
                     blast_risk_score: None,
                     root_cause_depth_score: None,
                     dark_zone_touches: None,
-                    duration_ms,
+                    duration_ms: start.elapsed().as_millis() as u64,
                     notes: Some("Tournament produced no candidates".to_string()),
                     failure_category: Some("no_candidates".to_string()),
                 };
             };
 
-            let graph_report = if !cand.git_diff.trim().is_empty() && !ctx.base_source_files.is_empty()
-            {
-                Some(graph.analyze_diff(&cand.git_diff, None, blast_cfg))
-            } else {
-                None
-            };
+            // Independently verify the tournament winner on host against the hidden ground-truth
+            // test patch and module regression suite — NEVER trust self-reported cand.is_green().
+            let verdict = verify_candidate_on_host(
+                &ctx.repo_url,
+                &ctx.parent_commit,
+                &cand.git_diff,
+                &ctx.ground_truth_test_patch,
+            )
+            .await;
 
-            let blast = cand.blast_radius.as_ref().or(graph_report.as_ref());
-            let blast_risk_score = blast.map(|b| b.composite_risk_score);
-            let root_cause_depth_score = blast.map(|b| b.root_cause_depth_score);
-            let dark_zone_touches = blast.map(|b| b.dark_zone_count());
+            let duration_ms = start.elapsed().as_millis() as u64;
             let speedup_pct = cand.arena_metrics.as_ref().map(|m| m.speedup_pct);
+            let semantic_root_cause_depth = cand
+                .blast_radius
+                .as_ref()
+                .map(|b| b.root_cause_depth_score);
+            let note_prefix = format!(
+                "Winner '{}' ({} candidates evaluated)",
+                cand.strategy_id,
+                output.session.candidates.len()
+            );
 
-            let diff_hits_target = diff_touches_expected(&cand.git_diff, expected_files);
-            let resolved_ground_truth = cand.is_green()
-                && (expected_files.is_empty() || diff_hits_target || !cand.git_diff.trim().is_empty());
-
-            ArmOutcome {
-                case_id: case_id.to_string(),
-                arm: EvalArm::EpicenterTournament,
-                resolved_ground_truth,
-                regression_free: cand.regression_suite_passed,
-                speedup_pct,
-                blast_risk_score,
-                root_cause_depth_score,
-                dark_zone_touches,
+            outcome_from_verdict(
+                case_id,
+                EvalArm::EpicenterTournament,
+                verdict,
                 duration_ms,
-                notes: Some(format!(
-                    "Winner '{}' ({} candidates evaluated)",
-                    cand.strategy_id,
-                    output.session.candidates.len()
-                )),
-                failure_category: if resolved_ground_truth {
-                    None
-                } else {
-                    Some("candidate_failed_verification".to_string())
-                },
-            }
+                speedup_pct,
+                semantic_root_cause_depth,
+                Some(note_prefix),
+            )
         }
         Err(err) => ArmOutcome {
             case_id: case_id.to_string(),
@@ -338,75 +385,1557 @@ async fn run_arm3_tournament(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn score_baseline_diff(
+fn outcome_from_verdict(
     case_id: &str,
     arm: EvalArm,
-    diff: &str,
+    verdict: HostVerificationResult,
     duration_ms: u64,
-    graph: &RepoCallGraph,
-    blast_cfg: &BlastAnalysisConfig,
-    expected_files: &HashSet<&str>,
-    default_root_cause_depth: f32,
+    speedup_pct: Option<f64>,
+    preferred_root_cause_depth: Option<f32>,
+    note_prefix: Option<String>,
 ) -> ArmOutcome {
-    let trimmed = diff.trim();
-    if trimmed.is_empty() {
-        return ArmOutcome {
-            case_id: case_id.to_string(),
-            arm,
-            resolved_ground_truth: false,
-            regression_free: false,
-            speedup_pct: None,
-            blast_risk_score: None,
-            root_cause_depth_score: None,
-            dark_zone_touches: None,
-            duration_ms,
-            notes: Some("Baseline produced an empty diff".to_string()),
-            failure_category: Some("empty_patch".to_string()),
-        };
-    }
+    let blast_risk_score = verdict
+        .blast_radius
+        .as_ref()
+        .map(|b| b.composite_risk_score);
+    let root_cause_depth_score = preferred_root_cause_depth.or_else(|| {
+        verdict
+            .blast_radius
+            .as_ref()
+            .map(|b| b.root_cause_depth_score)
+    });
+    let dark_zone_touches = verdict.blast_radius.as_ref().map(|b| b.dark_zone_count());
 
-    let report = graph.analyze_diff(trimmed, None, blast_cfg);
-    let touches_target = diff_touches_expected(trimmed, expected_files);
-    let parse_ok = parse_unified_diff(trimmed)
-        .map(|p| !p.is_empty())
-        .unwrap_or(false);
-    let resolved = parse_ok && (expected_files.is_empty() || touches_target);
+    let notes = match note_prefix {
+        Some(prefix) if !verdict.diagnostic_tail.is_empty() => {
+            Some(format!("{prefix} | {}", verdict.diagnostic_tail))
+        }
+        Some(prefix) => Some(prefix),
+        None if !verdict.diagnostic_tail.is_empty() => Some(verdict.diagnostic_tail),
+        None => None,
+    };
 
     ArmOutcome {
         case_id: case_id.to_string(),
         arm,
-        resolved_ground_truth: resolved,
-        regression_free: parse_ok && report.dark_zone_count() == 0,
-        speedup_pct: Some(0.0),
-        blast_risk_score: Some(report.composite_risk_score),
-        root_cause_depth_score: Some(default_root_cause_depth),
-        dark_zone_touches: Some(report.dark_zone_count()),
+        resolved_ground_truth: verdict.resolved_ground_truth,
+        regression_free: verdict.regression_free,
+        speedup_pct,
+        blast_risk_score,
+        root_cause_depth_score,
+        dark_zone_touches,
         duration_ms,
-        notes: Some(if resolved {
-            "Patch parsed cleanly and targeted PR source files".to_string()
-        } else {
-            "Patch did not cover all expected PR source files".to_string()
-        }),
-        failure_category: if resolved {
-            None
-        } else {
-            Some("missed_target_files".to_string())
+        notes,
+        failure_category: verdict.failure_category,
+    }
+}
+
+/// Independently verifies a candidate unified diff on the host against a hidden
+/// `ground_truth_test_patch` using a cached git mirror under `/tmp/epicenter-cache/repos/<owner>__<repo>`
+/// and an isolated detached worktree checked out at `parent_commit`.
+pub async fn verify_candidate_on_host(
+    repo_url: &str,
+    parent_commit: &str,
+    candidate_diff: &str,
+    ground_truth_test_patch: &str,
+) -> HostVerificationResult {
+    verify_candidate_on_host_with_cache(
+        Path::new(DEFAULT_REPO_CACHE_ROOT),
+        repo_url,
+        parent_commit,
+        candidate_diff,
+        ground_truth_test_patch,
+    )
+    .await
+}
+
+/// Same as `verify_candidate_on_host`, with a configurable cache root directory (ideal for tests).
+pub async fn verify_candidate_on_host_with_cache(
+    cache_root: &Path,
+    repo_url: &str,
+    parent_commit: &str,
+    candidate_diff: &str,
+    ground_truth_test_patch: &str,
+) -> HostVerificationResult {
+    // 1. Validate candidate diff is non-empty and parseable.
+    let trimmed_diff = candidate_diff.trim();
+    if trimmed_diff.is_empty() {
+        return HostVerificationResult {
+            patch_applied: false,
+            ground_truth_patch_applied: false,
+            resolved_ground_truth: false,
+            regression_free: false,
+            test_tampering: false,
+            blast_radius: None,
+            failure_category: Some("empty_patch".to_string()),
+            diagnostic_tail: "Candidate produced an empty diff".to_string(),
+        };
+    }
+
+    let candidate_files = extract_touched_paths(trimmed_diff);
+    if candidate_files.is_empty() {
+        return HostVerificationResult {
+            patch_applied: false,
+            ground_truth_patch_applied: false,
+            resolved_ground_truth: false,
+            regression_free: false,
+            test_tampering: false,
+            blast_radius: None,
+            failure_category: Some("empty_or_unparseable_diff".to_string()),
+            diagnostic_tail: "Candidate diff could not be parsed into file patches".to_string(),
+        };
+    }
+
+    // 2. Hard anti-tampering check: reject immediately if candidate modifies ANY file in
+    //    ground_truth_test_patch.
+    let gt_files = extract_touched_paths(ground_truth_test_patch);
+    let tampered: Vec<String> = candidate_files
+        .intersection(&gt_files)
+        .cloned()
+        .collect();
+    if !tampered.is_empty() {
+        return HostVerificationResult {
+            patch_applied: false,
+            ground_truth_patch_applied: false,
+            resolved_ground_truth: false,
+            regression_free: false,
+            test_tampering: true,
+            blast_radius: None,
+            failure_category: Some("test_tampering_violation".to_string()),
+            diagnostic_tail: format!(
+                "Candidate diff tampered with locked ground-truth test file(s): {}",
+                tampered.join(", ")
+            ),
+        };
+    }
+
+    // 3. Ensure cached git mirror and create an isolated detached worktree at parent_commit.
+    let (mirror_dir, slug_dir) = match ensure_cached_mirror(cache_root, repo_url, parent_commit).await {
+        Ok(res) => res,
+        Err((cat, msg)) => {
+            return HostVerificationResult {
+                patch_applied: false,
+                ground_truth_patch_applied: false,
+                resolved_ground_truth: false,
+                regression_free: false,
+                test_tampering: false,
+                blast_radius: None,
+                failure_category: Some(cat.to_string()),
+                diagnostic_tail: msg,
+            };
+        }
+    };
+
+    let wt_guard = match TempDirGuard::new("judge-wt") {
+        Ok(g) => g,
+        Err(err) => {
+            return HostVerificationResult {
+                patch_applied: false,
+                ground_truth_patch_applied: false,
+                resolved_ground_truth: false,
+                regression_free: false,
+                test_tampering: false,
+                blast_radius: None,
+                failure_category: Some("worktree_setup_failed".to_string()),
+                diagnostic_tail: format!("Failed to create worktree temp dir: {err}"),
+            };
+        }
+    };
+    let worktree_path = wt_guard.path().join("repo");
+
+    {
+        let mirror_lock = repo_mutex_for(&mirror_dir);
+        let _guard = mirror_lock.lock().await;
+        let add_out = run_git(
+            &mirror_dir,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                &worktree_path.to_string_lossy(),
+                parent_commit,
+            ],
+            GIT_CLONE_TIMEOUT_SECS,
+        )
+        .await;
+        if !add_out.success() {
+            return HostVerificationResult {
+                patch_applied: false,
+                ground_truth_patch_applied: false,
+                resolved_ground_truth: false,
+                regression_free: false,
+                test_tampering: false,
+                blast_radius: None,
+                failure_category: Some("parent_commit_checkout_failed".to_string()),
+                diagnostic_tail: format!(
+                    "git worktree add failed for {parent_commit}: {}",
+                    add_out.combined_tail(240)
+                ),
+            };
+        }
+    }
+
+    // Run verification inside worktree, then ALWAYS detach and remove the worktree cleanly.
+    let verdict = run_verification_in_worktree(
+        cache_root,
+        &slug_dir,
+        &worktree_path,
+        trimmed_diff,
+        ground_truth_test_patch,
+        &candidate_files,
+        &gt_files,
+    )
+    .await;
+
+    cleanup_worktree(&mirror_dir, &worktree_path).await;
+    drop(wt_guard);
+
+    verdict
+}
+
+async fn run_verification_in_worktree(
+    cache_root: &Path,
+    slug_dir: &str,
+    worktree_path: &Path,
+    candidate_diff: &str,
+    ground_truth_test_patch: &str,
+    candidate_files: &BTreeSet<String>,
+    gt_files: &BTreeSet<String>,
+) -> HostVerificationResult {
+    let patch_dir = match TempDirGuard::new("judge-patches") {
+        Ok(g) => g,
+        Err(err) => {
+            return HostVerificationResult {
+                patch_applied: false,
+                ground_truth_patch_applied: false,
+                resolved_ground_truth: false,
+                regression_free: false,
+                test_tampering: false,
+                blast_radius: None,
+                failure_category: Some("patch_temp_dir_error".to_string()),
+                diagnostic_tail: format!("Failed to create patch temp dir: {err}"),
+            };
+        }
+    };
+
+    // 4. Apply candidate diff via real `git apply`.
+    let candidate_patch_path = patch_dir.path().join("candidate.patch");
+    let normalized_candidate = ensure_trailing_newline(candidate_diff);
+    if let Err(err) = tokio::fs::write(&candidate_patch_path, &normalized_candidate).await {
+        return HostVerificationResult {
+            patch_applied: false,
+            ground_truth_patch_applied: false,
+            resolved_ground_truth: false,
+            regression_free: false,
+            test_tampering: false,
+            blast_radius: None,
+            failure_category: Some("patch_write_error".to_string()),
+            diagnostic_tail: format!("Failed to write candidate patch: {err}"),
+        };
+    }
+
+    let apply_cand = run_git(
+        worktree_path,
+        &[
+            "apply",
+            "--whitespace=nowarn",
+            &candidate_patch_path.to_string_lossy(),
+        ],
+        30,
+    )
+    .await;
+
+    if !apply_cand.success() {
+        let base_blast = compute_blast_radius_from_worktree(worktree_path, candidate_diff);
+        return HostVerificationResult {
+            patch_applied: false,
+            ground_truth_patch_applied: false,
+            resolved_ground_truth: false,
+            regression_free: false,
+            test_tampering: false,
+            blast_radius: base_blast,
+            failure_category: Some("patch_apply_conflict".to_string()),
+            diagnostic_tail: format!(
+                "git apply failed for candidate diff: {}",
+                apply_cand.combined_tail(280)
+            ),
+        };
+    }
+
+    // 5. Compute BlastRadiusReport from the real checked-out (patched) repository files.
+    let blast_radius = compute_blast_radius_from_worktree(worktree_path, candidate_diff);
+
+    // 6. Apply hidden ground_truth_test_patch via real `git apply`.
+    let trimmed_gt = ground_truth_test_patch.trim();
+    if trimmed_gt.is_empty() {
+        return HostVerificationResult {
+            patch_applied: true,
+            ground_truth_patch_applied: false,
+            resolved_ground_truth: false,
+            regression_free: false,
+            test_tampering: false,
+            blast_radius,
+            failure_category: Some("missing_ground_truth_test_patch".to_string()),
+            diagnostic_tail: "PR has no hidden ground-truth test patch to verify".to_string(),
+        };
+    }
+
+    let gt_patch_path = patch_dir.path().join("ground_truth.patch");
+    let normalized_gt = ensure_trailing_newline(trimmed_gt);
+    if let Err(err) = tokio::fs::write(&gt_patch_path, &normalized_gt).await {
+        return HostVerificationResult {
+            patch_applied: true,
+            ground_truth_patch_applied: false,
+            resolved_ground_truth: false,
+            regression_free: false,
+            test_tampering: false,
+            blast_radius,
+            failure_category: Some("ground_truth_patch_write_error".to_string()),
+            diagnostic_tail: format!("Failed to write ground-truth test patch: {err}"),
+        };
+    }
+
+    let mut apply_gt = run_git(
+        worktree_path,
+        &[
+            "apply",
+            "--whitespace=nowarn",
+            &gt_patch_path.to_string_lossy(),
+        ],
+        30,
+    )
+    .await;
+    if !apply_gt.success() {
+        apply_gt = run_git(
+            worktree_path,
+            &[
+                "apply",
+                "--recount",
+                "--whitespace=nowarn",
+                &gt_patch_path.to_string_lossy(),
+            ],
+            30,
+        )
+        .await;
+    }
+
+    if !apply_gt.success() {
+        return HostVerificationResult {
+            patch_applied: true,
+            ground_truth_patch_applied: false,
+            resolved_ground_truth: false,
+            regression_free: false,
+            test_tampering: false,
+            blast_radius,
+            failure_category: Some("ground_truth_patch_apply_failed".to_string()),
+            diagnostic_tail: format!(
+                "git apply failed for hidden ground-truth test patch: {}",
+                apply_gt.combined_tail(280)
+            ),
+        };
+    }
+
+    // Collect existing ground-truth test files in the worktree after applying the test patch.
+    let gt_test_files: Vec<String> = gt_files
+        .iter()
+        .filter(|rel| worktree_path.join(rel).is_file())
+        .cloned()
+        .collect();
+
+    if gt_test_files.is_empty() {
+        return HostVerificationResult {
+            patch_applied: true,
+            ground_truth_patch_applied: true,
+            resolved_ground_truth: false,
+            regression_free: false,
+            test_tampering: false,
+            blast_radius,
+            failure_category: Some("no_executable_ground_truth_tests".to_string()),
+            diagnostic_tail: "Ground-truth test patch did not produce any runnable test files"
+                .to_string(),
+        };
+    }
+
+    // 7. Execute language-appropriate ground-truth tests (60s timeout) + module regression suite.
+    let lang = detect_repo_language(worktree_path, &gt_test_files);
+    match lang {
+        RepoLanguage::Python => {
+            run_python_verification(
+                cache_root,
+                slug_dir,
+                worktree_path,
+                &gt_patch_path,
+                &gt_test_files,
+                candidate_files,
+                blast_radius,
+            )
+            .await
+        }
+        RepoLanguage::TypeScriptJavaScript => {
+            run_ts_js_verification(
+                cache_root,
+                slug_dir,
+                worktree_path,
+                &gt_patch_path,
+                &gt_test_files,
+                blast_radius,
+            )
+            .await
+        }
+        RepoLanguage::Unknown => HostVerificationResult {
+            patch_applied: true,
+            ground_truth_patch_applied: true,
+            resolved_ground_truth: false,
+            regression_free: false,
+            test_tampering: false,
+            blast_radius,
+            failure_category: Some("unsupported_test_runtime".to_string()),
+            diagnostic_tail: format!(
+                "Could not detect Python or TS/JS test runtime for ground-truth files: {}",
+                gt_test_files.join(", ")
+            ),
         },
     }
 }
 
-fn diff_touches_expected(diff: &str, expected_files: &HashSet<&str>) -> bool {
-    if expected_files.is_empty() {
-        return !diff.trim().is_empty();
-    }
-    let Ok(patches) = parse_unified_diff(diff) else {
-        return false;
+async fn run_python_verification(
+    cache_root: &Path,
+    slug_dir: &str,
+    worktree_path: &Path,
+    gt_patch_path: &Path,
+    gt_test_files: &[String],
+    candidate_files: &BTreeSet<String>,
+    blast_radius: Option<BlastRadiusReport>,
+) -> HostVerificationResult {
+    let venv_python = match ensure_python_venv(cache_root, slug_dir, worktree_path).await {
+        Ok(py) => py,
+        Err(err) => {
+            return HostVerificationResult {
+                patch_applied: true,
+                ground_truth_patch_applied: true,
+                resolved_ground_truth: false,
+                regression_free: false,
+                test_tampering: false,
+                blast_radius,
+                failure_category: Some("python_env_setup_failed".to_string()),
+                diagnostic_tail: format!("Python/uv environment setup failed: {err}"),
+            };
+        }
     };
-    patches.iter().any(|p| {
-        p.target_path()
-            .is_some_and(|path| expected_files.contains(path))
-    })
+
+    let pythonpath = build_worktree_pythonpath(worktree_path);
+
+    // Run hidden ground-truth tests (60s timeout).
+    let mut gt_args: Vec<String> = vec![
+        "-m".to_string(),
+        "pytest".to_string(),
+        "-q".to_string(),
+        "--no-header".to_string(),
+    ];
+    gt_args.extend(gt_test_files.iter().cloned());
+
+    let gt_out = run_python_cmd(
+        &venv_python,
+        worktree_path,
+        &pythonpath,
+        &gt_args,
+        TEST_EXEC_TIMEOUT_SECS,
+    )
+    .await;
+    let resolved_ground_truth = gt_out.success();
+
+    // If ground-truth tests failed, revert ONLY the hidden ground-truth test patch so
+    // module regression testing honestly evaluates existing tests without double-counting
+    // the new ground-truth failure as a regression.
+    if !resolved_ground_truth {
+        revert_ground_truth_test_patch(worktree_path, gt_patch_path, gt_test_files).await;
+    }
+
+    // Run module regression tests (60s timeout).
+    let regression_targets =
+        collect_python_regression_targets(worktree_path, gt_test_files, candidate_files);
+
+    let (regression_free, reg_tail) = if regression_targets.is_empty() {
+        // Repo had no pre-existing tests outside the newly added ground-truth test file.
+        (true, "no pre-existing module regression tests found".to_string())
+    } else {
+        let mut reg_args: Vec<String> = vec![
+            "-m".to_string(),
+            "pytest".to_string(),
+            "-q".to_string(),
+            "--no-header".to_string(),
+        ];
+        reg_args.extend(regression_targets);
+        let reg_out = run_python_cmd(
+            &venv_python,
+            worktree_path,
+            &pythonpath,
+            &reg_args,
+            TEST_EXEC_TIMEOUT_SECS,
+        )
+        .await;
+        (reg_out.success(), reg_out.combined_tail(220))
+    };
+
+    let (failure_category, diagnostic_tail) =
+        summarize_test_verdict(resolved_ground_truth, regression_free, &gt_out, &reg_tail);
+
+    HostVerificationResult {
+        patch_applied: true,
+        ground_truth_patch_applied: true,
+        resolved_ground_truth,
+        regression_free,
+        test_tampering: false,
+        blast_radius,
+        failure_category,
+        diagnostic_tail,
+    }
+}
+
+async fn run_ts_js_verification(
+    cache_root: &Path,
+    slug_dir: &str,
+    worktree_path: &Path,
+    gt_patch_path: &Path,
+    gt_test_files: &[String],
+    blast_radius: Option<BlastRadiusReport>,
+) -> HostVerificationResult {
+    let linked_node_modules = ensure_node_modules_linked(cache_root, slug_dir, worktree_path).await;
+    let package_json = std::fs::read_to_string(worktree_path.join("package.json")).ok();
+    let uses_vitest = worktree_path
+        .join("node_modules/.bin/vitest")
+        .exists()
+        || package_json
+            .as_deref()
+            .is_some_and(|s| s.contains("\"vitest\""));
+    let has_npm_test = package_json
+        .as_deref()
+        .is_some_and(|s| s.contains("\"test\""));
+
+    let gt_out = if uses_vitest {
+        let mut args = vec!["--no-install", "vitest", "run"];
+        let refs: Vec<&str> = gt_test_files.iter().map(String::as_str).collect();
+        args.extend(refs);
+        run_cmd("npx", worktree_path, &args, &[], TEST_EXEC_TIMEOUT_SECS).await
+    } else if has_npm_test {
+        let mut args = vec!["test", "--"];
+        let refs: Vec<&str> = gt_test_files.iter().map(String::as_str).collect();
+        args.extend(refs);
+        run_cmd("npm", worktree_path, &args, &[], TEST_EXEC_TIMEOUT_SECS).await
+    } else {
+        let mut args = vec!["--test"];
+        let refs: Vec<&str> = gt_test_files.iter().map(String::as_str).collect();
+        args.extend(refs);
+        run_cmd("node", worktree_path, &args, &[], TEST_EXEC_TIMEOUT_SECS).await
+    };
+
+    let resolved_ground_truth = gt_out.success();
+
+    if !resolved_ground_truth {
+        revert_ground_truth_test_patch(worktree_path, gt_patch_path, gt_test_files).await;
+    }
+
+    let reg_out = if uses_vitest {
+        let module_dirs = collect_parent_dirs(worktree_path, gt_test_files);
+        let mut args: Vec<String> = vec![
+            "--no-install".to_string(),
+            "vitest".to_string(),
+            "run".to_string(),
+        ];
+        args.extend(module_dirs);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        run_cmd("npx", worktree_path, &refs, &[], TEST_EXEC_TIMEOUT_SECS).await
+    } else if has_npm_test {
+        run_cmd(
+            "npm",
+            worktree_path,
+            &["test"],
+            &[],
+            TEST_EXEC_TIMEOUT_SECS,
+        )
+        .await
+    } else {
+        let existing_js_tests = collect_js_regression_targets(worktree_path, gt_test_files);
+        if existing_js_tests.is_empty() {
+            CmdOutput {
+                exit_code: Some(0),
+                timed_out: false,
+                stdout: "no pre-existing JS regression tests found".to_string(),
+                stderr: String::new(),
+            }
+        } else {
+            let mut args = vec!["--test"];
+            let refs: Vec<&str> = existing_js_tests.iter().map(String::as_str).collect();
+            args.extend(refs);
+            run_cmd("node", worktree_path, &args, &[], TEST_EXEC_TIMEOUT_SECS).await
+        }
+    };
+
+    if linked_node_modules {
+        let _ = std::fs::remove_file(worktree_path.join("node_modules"));
+    }
+
+    let regression_free = reg_out.success();
+    let reg_tail = reg_out.combined_tail(220);
+    let (failure_category, diagnostic_tail) =
+        summarize_test_verdict(resolved_ground_truth, regression_free, &gt_out, &reg_tail);
+
+    HostVerificationResult {
+        patch_applied: true,
+        ground_truth_patch_applied: true,
+        resolved_ground_truth,
+        regression_free,
+        test_tampering: false,
+        blast_radius,
+        failure_category,
+        diagnostic_tail,
+    }
+}
+
+fn summarize_test_verdict(
+    resolved_ground_truth: bool,
+    regression_free: bool,
+    gt_out: &CmdOutput,
+    reg_tail: &str,
+) -> (Option<String>, String) {
+    match (resolved_ground_truth, regression_free) {
+        (true, true) => (
+            None,
+            format!(
+                "PASSED host ground-truth & module regression tests: {}",
+                gt_out.combined_tail(200)
+            ),
+        ),
+        (true, false) => (
+            Some("regression_suite_failed".to_string()),
+            format!("PASSED ground-truth tests, FAILED module regression suite: {reg_tail}"),
+        ),
+        (false, true) => (
+            Some("ground_truth_tests_failed".to_string()),
+            format!(
+                "FAILED host ground-truth tests (existing module suite passed): {}",
+                gt_out.combined_tail(240)
+            ),
+        ),
+        (false, false) => (
+            Some("ground_truth_and_regression_failed".to_string()),
+            format!(
+                "FAILED host ground-truth tests AND module regression suite: {} | reg: {}",
+                gt_out.combined_tail(160),
+                truncate_tail(reg_tail, 120)
+            ),
+        ),
+    }
+}
+
+async fn ensure_cached_mirror(
+    cache_root: &Path,
+    repo_url: &str,
+    parent_commit: &str,
+) -> std::result::Result<(PathBuf, String), (&'static str, String)> {
+    let (clone_url, slug_dir) = resolve_clone_target(repo_url);
+    let mirror_dir = cache_root.join(&slug_dir);
+
+    if let Err(err) = std::fs::create_dir_all(cache_root) {
+        return Err((
+            "repo_checkout_failed",
+            format!("Failed to create repo cache dir {}: {err}", cache_root.display()),
+        ));
+    }
+
+    let mirror_lock = repo_mutex_for(&mirror_dir);
+    let _guard = mirror_lock.lock().await;
+
+    if !mirror_dir.join(".git").exists() {
+        let _ = std::fs::remove_dir_all(&mirror_dir);
+        let clone_out = run_git_unscoped(
+            &[
+                "-c",
+                "credential.helper=",
+                "-c",
+                "core.askPass=true",
+                "clone",
+                "--no-checkout",
+                &clone_url,
+                &mirror_dir.to_string_lossy(),
+            ],
+            GIT_CLONE_TIMEOUT_SECS,
+        )
+        .await;
+        if !clone_out.success() {
+            let _ = std::fs::remove_dir_all(&mirror_dir);
+            return Err((
+                "repo_checkout_failed",
+                format!(
+                    "git clone failed for {clone_url}: {}",
+                    clone_out.combined_tail(240)
+                ),
+            ));
+        }
+    }
+
+    let commit_spec = format!("{parent_commit}^{{commit}}");
+    let has_commit = run_git(&mirror_dir, &["cat-file", "-e", &commit_spec], 15).await;
+    if !has_commit.success() {
+        let fetch_commit = run_git(
+            &mirror_dir,
+            &[
+                "-c",
+                "credential.helper=",
+                "-c",
+                "core.askPass=true",
+                "fetch",
+                "--no-tags",
+                "origin",
+                parent_commit,
+            ],
+            GIT_CLONE_TIMEOUT_SECS,
+        )
+        .await;
+        if !fetch_commit.success() {
+            let _ = run_git(
+                &mirror_dir,
+                &[
+                    "-c",
+                    "credential.helper=",
+                    "-c",
+                    "core.askPass=true",
+                    "fetch",
+                    "--all",
+                    "--tags",
+                ],
+                GIT_CLONE_TIMEOUT_SECS,
+            )
+            .await;
+        }
+        let recheck = run_git(&mirror_dir, &["cat-file", "-e", &commit_spec], 15).await;
+        if !recheck.success() {
+            return Err((
+                "parent_commit_not_found",
+                format!(
+                    "Parent commit '{parent_commit}' not found in repository mirror for {clone_url}"
+                ),
+            ));
+        }
+    }
+
+    Ok((mirror_dir, slug_dir))
+}
+
+async fn cleanup_worktree(mirror_dir: &Path, worktree_path: &Path) {
+    let mirror_lock = repo_mutex_for(mirror_dir);
+    let _guard = mirror_lock.lock().await;
+    let _ = run_git(
+        mirror_dir,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            &worktree_path.to_string_lossy(),
+        ],
+        30,
+    )
+    .await;
+    let _ = std::fs::remove_dir_all(worktree_path);
+    let _ = run_git(mirror_dir, &["worktree", "prune"], 15).await;
+}
+
+async fn ensure_python_venv(
+    cache_root: &Path,
+    slug_dir: &str,
+    worktree_path: &Path,
+) -> std::result::Result<PathBuf, String> {
+    let has_pkg_manifest = worktree_path.join("pyproject.toml").exists()
+        || worktree_path.join("setup.py").exists()
+        || worktree_path.join("setup.cfg").exists()
+        || worktree_path.join("requirements.txt").exists();
+
+    let venvs_root = cache_root
+        .parent()
+        .unwrap_or(cache_root)
+        .join("venvs");
+    let venv_dir = if has_pkg_manifest {
+        venvs_root.join(slug_dir)
+    } else {
+        venvs_root.join("_pytest_base")
+    };
+
+    let venv_lock = repo_mutex_for(&venv_dir);
+    let _guard = venv_lock.lock().await;
+
+    std::fs::create_dir_all(&venvs_root)
+        .map_err(|e| format!("failed to create venvs root {}: {e}", venvs_root.display()))?;
+
+    let uv_bin = if Path::new("/opt/homebrew/bin/uv").exists() {
+        "/opt/homebrew/bin/uv"
+    } else {
+        "uv"
+    };
+    let venv_python = venv_dir.join("bin/python");
+    let marker = venv_dir.join(".epicenter_deps_ready");
+
+    if !venv_python.exists() {
+        let mut venv_out = run_cmd(
+            uv_bin,
+            worktree_path,
+            &["venv", "--python", "3.12", &venv_dir.to_string_lossy()],
+            &[],
+            ENV_SETUP_TIMEOUT_SECS,
+        )
+        .await;
+        if !venv_out.success() {
+            venv_out = run_cmd(
+                uv_bin,
+                worktree_path,
+                &["venv", &venv_dir.to_string_lossy()],
+                &[],
+                ENV_SETUP_TIMEOUT_SECS,
+            )
+            .await;
+        }
+        if !venv_out.success() {
+            return Err(format!("uv venv failed: {}", venv_out.combined_tail(200)));
+        }
+    }
+
+    if !marker.exists() {
+        let py_str = venv_python.to_string_lossy().to_string();
+        let pytest_out = run_cmd(
+            uv_bin,
+            worktree_path,
+            &["pip", "install", "--python", &py_str, "pytest"],
+            &[],
+            ENV_SETUP_TIMEOUT_SECS,
+        )
+        .await;
+        if !pytest_out.success() {
+            return Err(format!(
+                "uv pip install pytest failed: {}",
+                pytest_out.combined_tail(200)
+            ));
+        }
+
+        if worktree_path.join("pyproject.toml").exists()
+            || worktree_path.join("setup.py").exists()
+            || worktree_path.join("setup.cfg").exists()
+        {
+            let wt_str = worktree_path.to_string_lossy().to_string();
+            let editable_out = run_cmd(
+                uv_bin,
+                worktree_path,
+                &["pip", "install", "--python", &py_str, "-e", &wt_str],
+                &[],
+                ENV_SETUP_TIMEOUT_SECS,
+            )
+            .await;
+            if !editable_out.success() {
+                warn!(
+                    slug = %slug_dir,
+                    detail = %editable_out.combined_tail(200),
+                    "best-effort editable install of repo dependencies failed; proceeding with PYTHONPATH"
+                );
+            }
+        }
+
+        for req_rel in ["requirements/tests.txt", "requirements-test.txt", "requirements.txt"] {
+            let req_path = worktree_path.join(req_rel);
+            if req_path.is_file() {
+                let req_str = req_path.to_string_lossy().to_string();
+                let _ = run_cmd(
+                    uv_bin,
+                    worktree_path,
+                    &["pip", "install", "--python", &py_str, "-r", &req_str],
+                    &[],
+                    ENV_SETUP_TIMEOUT_SECS,
+                )
+                .await;
+            }
+        }
+
+        let _ = std::fs::write(&marker, b"ready\n");
+    }
+
+    // CRITICAL: Always strip mirror/worktree editable `.pth` and `__editable__*` hooks so
+    // `PYTHONPATH=<worktree>/src:<worktree>` ALWAYS wins over any cached editable install!
+    strip_editable_pth_files(&venv_dir);
+
+    Ok(venv_python)
+}
+
+/// Removes editable `.pth`, `__editable__*`, and `.egg-link` files from a cached Python venv's
+/// `site-packages/` so isolated worktree edits via `PYTHONPATH` can never be shadowed by a
+/// stale mirror or prior worktree editable install.
+pub fn strip_editable_pth_files(venv_dir: &Path) {
+    let lib_dir = venv_dir.join("lib");
+    let Ok(py_dirs) = std::fs::read_dir(&lib_dir) else {
+        return;
+    };
+
+    for entry in py_dirs.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("python") {
+            continue;
+        }
+        let site_packages = entry.path().join("site-packages");
+        let Ok(sp_entries) = std::fs::read_dir(&site_packages) else {
+            continue;
+        };
+
+        for sp_entry in sp_entries.flatten() {
+            let path = sp_entry.path();
+            let Some(fname) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let lower = fname.to_ascii_lowercase();
+
+            if lower.starts_with("__editable__")
+                || lower.starts_with("_editable_")
+                || lower.ends_with(".egg-link")
+            {
+                let _ = std::fs::remove_file(&path);
+                continue;
+            }
+
+            if lower.ends_with(".pth")
+                && lower != "_virtualenv.pth"
+                && lower != "distutils-precedence.pth"
+            {
+                if let Ok(contents) = std::fs::read_to_string(&path) {
+                    let points_to_checkout = contents.lines().any(|line| {
+                        let trimmed = line.trim();
+                        !trimmed.is_empty()
+                            && !trimmed.starts_with('#')
+                            && (trimmed.contains("epicenter-")
+                                || trimmed.contains("/tmp/")
+                                || trimmed.contains("/private/tmp/")
+                                || trimmed.contains("/var/folders/")
+                                || trimmed.starts_with("import __editable__")
+                                || (Path::new(trimmed).is_absolute()
+                                    && !Path::new(trimmed).starts_with(venv_dir)))
+                    });
+                    if points_to_checkout {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn build_worktree_pythonpath(worktree_path: &Path) -> String {
+    let src_dir = worktree_path.join("src");
+    if src_dir.is_dir() {
+        format!("{}:{}", src_dir.display(), worktree_path.display())
+    } else {
+        worktree_path.display().to_string()
+    }
+}
+
+async fn ensure_node_modules_linked(
+    cache_root: &Path,
+    slug_dir: &str,
+    worktree_path: &Path,
+) -> bool {
+    let pkg_json = worktree_path.join("package.json");
+    if !pkg_json.is_file() || worktree_path.join("node_modules").exists() {
+        return false;
+    }
+
+    let node_cache_dir = cache_root
+        .parent()
+        .unwrap_or(cache_root)
+        .join("node")
+        .join(slug_dir);
+    let node_lock = repo_mutex_for(&node_cache_dir);
+    let _guard = node_lock.lock().await;
+
+    let cached_nm = node_cache_dir.join("node_modules");
+    if !cached_nm.is_dir() {
+        if std::fs::create_dir_all(&node_cache_dir).is_err() {
+            return false;
+        }
+        let _ = std::fs::copy(&pkg_json, node_cache_dir.join("package.json"));
+        for lockfile in ["package-lock.json", "npm-shrinkwrap.json"] {
+            let src = worktree_path.join(lockfile);
+            if src.is_file() {
+                let _ = std::fs::copy(&src, node_cache_dir.join(lockfile));
+            }
+        }
+        let install_out = run_cmd(
+            "npm",
+            &node_cache_dir,
+            &["install", "--no-audit", "--no-fund", "--ignore-scripts"],
+            &[],
+            ENV_SETUP_TIMEOUT_SECS,
+        )
+        .await;
+        if !install_out.success() || !cached_nm.is_dir() {
+            warn!(
+                slug = %slug_dir,
+                detail = %install_out.combined_tail(200),
+                "npm install failed for cached node_modules"
+            );
+            return false;
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&cached_nm, worktree_path.join("node_modules")).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+async fn revert_ground_truth_test_patch(
+    worktree_path: &Path,
+    gt_patch_path: &Path,
+    gt_test_files: &[String],
+) {
+    let rev = run_git(
+        worktree_path,
+        &[
+            "apply",
+            "-R",
+            "--whitespace=nowarn",
+            &gt_patch_path.to_string_lossy(),
+        ],
+        20,
+    )
+    .await;
+    if !rev.success() {
+        for rel in gt_test_files {
+            let co = run_git(worktree_path, &["checkout", "--", rel], 10).await;
+            if !co.success() {
+                let _ = std::fs::remove_file(worktree_path.join(rel));
+            }
+        }
+    }
+}
+
+fn collect_python_regression_targets(
+    worktree_path: &Path,
+    gt_test_files: &[String],
+    candidate_files: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut parent_dirs = BTreeSet::new();
+    for rel in gt_test_files {
+        if let Some(parent) = Path::new(rel).parent() {
+            let p_str = normalize_rel_path(&parent.to_string_lossy());
+            if !p_str.is_empty() && worktree_path.join(&p_str).is_dir() {
+                parent_dirs.insert(p_str);
+            }
+        }
+    }
+    if parent_dirs.is_empty() {
+        for fallback in ["tests", "test"] {
+            if worktree_path.join(fallback).is_dir() {
+                parent_dirs.insert(fallback.to_string());
+                break;
+            }
+        }
+    }
+
+    let mut all_py_tests: Vec<String> = Vec::new();
+    for dir_rel in &parent_dirs {
+        collect_py_test_files_recursive(worktree_path, &worktree_path.join(dir_rel), &mut all_py_tests);
+    }
+    all_py_tests.sort();
+    all_py_tests.dedup();
+
+    if all_py_tests.is_empty() {
+        return Vec::new();
+    }
+    if all_py_tests.len() <= 40 {
+        return all_py_tests;
+    }
+
+    // For large repositories (>40 test files in tests/), prioritize tests matching modified
+    // module stems plus existing ground-truth test files so regression completes well within 60s.
+    let stems: HashSet<String> = candidate_files
+        .iter()
+        .filter_map(|p| {
+            Path::new(p)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_ascii_lowercase())
+        })
+        .filter(|s| s.len() >= 3 && s != "__init__")
+        .collect();
+
+    let mut prioritized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for gt in gt_test_files {
+        if worktree_path.join(gt).is_file() && seen.insert(gt.clone()) {
+            prioritized.push(gt.clone());
+        }
+    }
+    for test_file in &all_py_tests {
+        let lower = test_file.to_ascii_lowercase();
+        if stems.iter().any(|stem| lower.contains(stem)) && seen.insert(test_file.clone()) {
+            prioritized.push(test_file.clone());
+        }
+    }
+    for test_file in &all_py_tests {
+        if prioritized.len() >= 20 {
+            break;
+        }
+        if seen.insert(test_file.clone()) {
+            prioritized.push(test_file.clone());
+        }
+    }
+
+    prioritized
+}
+
+fn collect_py_test_files_recursive(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name != "__pycache__" && !name.starts_with('.') {
+                collect_py_test_files_recursive(root, &path, out);
+            }
+        } else if path.is_file() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py")) {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    out.push(normalize_rel_path(&rel.to_string_lossy()));
+                }
+            }
+        }
+    }
+}
+
+fn collect_parent_dirs(worktree_path: &Path, files: &[String]) -> Vec<String> {
+    let mut dirs = BTreeSet::new();
+    for rel in files {
+        if let Some(parent) = Path::new(rel).parent() {
+            let p_str = normalize_rel_path(&parent.to_string_lossy());
+            if !p_str.is_empty() && worktree_path.join(&p_str).is_dir() {
+                dirs.insert(p_str);
+            }
+        }
+    }
+    dirs.into_iter().collect()
+}
+
+fn collect_js_regression_targets(worktree_path: &Path, gt_test_files: &[String]) -> Vec<String> {
+    let dirs = collect_parent_dirs(worktree_path, gt_test_files);
+    let mut targets = Vec::new();
+    for dir_rel in dirs {
+        if let Ok(entries) = std::fs::read_dir(worktree_path.join(&dir_rel)) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                    if name.ends_with(".test.js")
+                        || name.ends_with(".test.mjs")
+                        || name.ends_with(".spec.js")
+                    {
+                        if let Ok(rel) = path.strip_prefix(worktree_path) {
+                            targets.push(normalize_rel_path(&rel.to_string_lossy()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+fn detect_repo_language(worktree_path: &Path, gt_test_files: &[String]) -> RepoLanguage {
+    if gt_test_files.iter().any(|f| f.ends_with(".py")) {
+        return RepoLanguage::Python;
+    }
+    if gt_test_files.iter().any(|f| {
+        f.ends_with(".ts")
+            || f.ends_with(".tsx")
+            || f.ends_with(".js")
+            || f.ends_with(".jsx")
+            || f.ends_with(".mjs")
+            || f.ends_with(".cjs")
+    }) {
+        return RepoLanguage::TypeScriptJavaScript;
+    }
+    if worktree_path.join("pyproject.toml").exists()
+        || worktree_path.join("setup.py").exists()
+        || worktree_path.join("setup.cfg").exists()
+        || worktree_path.join("pytest.ini").exists()
+    {
+        return RepoLanguage::Python;
+    }
+    if worktree_path.join("package.json").exists() {
+        return RepoLanguage::TypeScriptJavaScript;
+    }
+    RepoLanguage::Unknown
+}
+
+/// Computes a real `BlastRadiusReport` directly from the checked-out repository files on disk.
+fn compute_blast_radius_from_worktree(
+    worktree_path: &Path,
+    candidate_diff: &str,
+) -> Option<BlastRadiusReport> {
+    let graph = match RepoCallGraph::from_directory(worktree_path) {
+        Ok(g) => g,
+        Err(_) => {
+            // Tolerant fallback walker in case a repository contains a non-UTF-8 fixture file.
+            let sources = collect_utf8_sources_tolerant(worktree_path);
+            if sources.is_empty() {
+                return None;
+            }
+            RepoCallGraph::from_sources(&sources)
+        }
+    };
+    Some(graph.analyze_diff(candidate_diff, None, &BlastAnalysisConfig::default()))
+}
+
+fn collect_utf8_sources_tolerant(root: &Path) -> BTreeMap<String, String> {
+    const IGNORED_DIRS: &[&str] = &[
+        ".git",
+        "node_modules",
+        "target",
+        ".venv",
+        "venv",
+        "__pycache__",
+        "dist",
+        "build",
+        ".next",
+        ".mypy_cache",
+        ".pytest_cache",
+    ];
+    const EXTENSIONS: &[&str] = &[
+        "py", "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts", "rs", "go", "java", "kt",
+        "rb", "cs", "cpp", "c", "h", "hpp",
+    ];
+    const MAX_FILE_BYTES: u64 = 256 * 1024;
+    const MAX_FILES: usize = 600;
+
+    let mut sources = BTreeMap::new();
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        if sources.len() >= MAX_FILES {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !IGNORED_DIRS.contains(&name.as_str()) {
+                    stack.push(path);
+                }
+            } else if path.is_file() {
+                let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if !EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()) {
+                    continue;
+                }
+                if entry.metadata().map(|m| m.len()).unwrap_or(u64::MAX) > MAX_FILE_BYTES {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(rel) = path.strip_prefix(root) {
+                        sources.insert(normalize_rel_path(&rel.to_string_lossy()), content);
+                    }
+                }
+            }
+        }
+    }
+
+    sources
+}
+
+/// Extracts all normalized relative file paths touched by a unified diff.
+pub fn extract_touched_paths(diff: &str) -> BTreeSet<String> {
+    let mut paths = BTreeSet::new();
+    for file_diff in parse_graph_diff(diff) {
+        let norm = normalize_rel_path(&file_diff.path);
+        if !norm.is_empty() && norm != "/dev/null" {
+            paths.insert(norm);
+        }
+    }
+    if let Ok(gh_patches) = parse_github_diff(diff) {
+        for patch in gh_patches {
+            if let Some(p) = patch.target_path() {
+                let norm = normalize_rel_path(p);
+                if !norm.is_empty() && norm != "/dev/null" {
+                    paths.insert(norm);
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn resolve_clone_target(repo_url: &str) -> (String, String) {
+    if let Ok(slug) = parse_github_repo_url(repo_url) {
+        let clone_url = format!("https://github.com/{}/{}.git", slug.owner, slug.repo);
+        let dir_slug = format!(
+            "{}__{}",
+            sanitize_path_segment(&slug.owner),
+            sanitize_path_segment(&slug.repo)
+        );
+        return (clone_url, dir_slug);
+    }
+
+    let trimmed = repo_url.trim();
+    let basename = Path::new(trimmed.trim_start_matches("file://"))
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(sanitize_path_segment)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "repo".to_string());
+    let hash = fnv1a_64(trimmed.as_bytes());
+    (trimmed.to_string(), format!("local__{basename}_{hash:016x}"))
+}
+
+fn sanitize_path_segment(seg: &str) -> String {
+    seg.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn repo_mutex_for(path: &Path) -> Arc<AsyncMutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> = OnceLock::new();
+    let map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().expect("repo cache lock map poisoned");
+    guard
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone()
+}
+
+async fn run_git(cwd: &Path, args: &[&str], timeout_secs: u64) -> CmdOutput {
+    run_cmd(
+        "git",
+        cwd,
+        args,
+        &[("GIT_TERMINAL_PROMPT", "0")],
+        timeout_secs,
+    )
+    .await
+}
+
+async fn run_git_unscoped(args: &[&str], timeout_secs: u64) -> CmdOutput {
+    run_cmd(
+        "git",
+        &std::env::temp_dir(),
+        args,
+        &[("GIT_TERMINAL_PROMPT", "0")],
+        timeout_secs,
+    )
+    .await
+}
+
+async fn run_python_cmd(
+    venv_python: &Path,
+    cwd: &Path,
+    pythonpath: &str,
+    args: &[String],
+    timeout_secs: u64,
+) -> CmdOutput {
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_cmd(
+        &venv_python.to_string_lossy(),
+        cwd,
+        &refs,
+        &[
+            ("PYTHONPATH", pythonpath),
+            ("PYTHONDONTWRITEBYTECODE", "1"),
+        ],
+        timeout_secs,
+    )
+    .await
+}
+
+async fn run_cmd(
+    program: &str,
+    cwd: &Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+    timeout_secs: u64,
+) -> CmdOutput {
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .kill_on_drop(true);
+    for &(k, v) in envs {
+        cmd.env(k, v);
+    }
+
+    match tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await {
+        Ok(Ok(out)) => CmdOutput {
+            exit_code: out.status.code(),
+            timed_out: false,
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+        },
+        Ok(Err(err)) => CmdOutput {
+            exit_code: None,
+            timed_out: false,
+            stdout: String::new(),
+            stderr: format!("failed to spawn '{program}': {err}"),
+        },
+        Err(_) => CmdOutput {
+            exit_code: None,
+            timed_out: true,
+            stdout: String::new(),
+            stderr: format!("command '{program}' timed out after {timeout_secs}s"),
+        },
+    }
+}
+
+/// Downloads reachable PR media URLs (15s timeout, max 15MB each) so Arm 3's Tournament Engine
+/// receives real multimodal visual evidence instead of an empty attachment list.
+pub async fn download_pr_media_attachments(media_urls: &[String]) -> Vec<UploadedAttachmentBytes> {
+    if media_urls.is_empty() {
+        return Vec::new();
+    }
+
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(MEDIA_DOWNLOAD_TIMEOUT_SECS))
+        .user_agent("epicenter-server/0.1.0")
+        .build()
+    else {
+        return Vec::new();
+    };
+
+    let mut attachments = Vec::new();
+
+    for (idx, url) in media_urls.iter().take(MAX_MEDIA_ATTACHMENTS).enumerate() {
+        let resp = match client.get(url).send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                warn!(%url, status = %r.status(), "skipping unreachable PR media URL");
+                continue;
+            }
+            Err(err) => {
+                warn!(%url, %err, "failed downloading PR media URL");
+                continue;
+            }
+        };
+
+        if let Some(len) = resp.content_length() {
+            if len as usize > MAX_MEDIA_DOWNLOAD_BYTES {
+                warn!(%url, content_length = len, "skipping PR media URL exceeding 15MB limit");
+                continue;
+            }
+        }
+
+        let header_mime = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(';').next())
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty());
+
+        if header_mime
+            .as_deref()
+            .is_some_and(|m| m.starts_with("text/html"))
+        {
+            warn!(%url, "skipping PR media URL that returned text/html");
+            continue;
+        }
+
+        let mut bytes = Vec::new();
+        let mut stream = resp.bytes_stream();
+        let mut exceeded = false;
+        while let Some(chunk_res) = stream.next().await {
+            match chunk_res {
+                Ok(chunk) => {
+                    if bytes.len() + chunk.len() > MAX_MEDIA_DOWNLOAD_BYTES {
+                        exceeded = true;
+                        break;
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
+                Err(err) => {
+                    warn!(%url, %err, "stream error while reading PR media URL");
+                    exceeded = true;
+                    break;
+                }
+            }
+        }
+
+        if exceeded || bytes.is_empty() {
+            continue;
+        }
+
+        let filename = extract_filename_from_url(url, idx);
+        let mime_type = header_mime
+            .unwrap_or_else(|| crate::routes::infer_mime_from_filename(&filename).to_string());
+        let media_kind = infer_media_kind(&mime_type);
+        let meta = AttachmentMeta {
+            id: Uuid::new_v4(),
+            filename,
+            mime_type,
+            media_kind,
+            size_bytes: bytes.len() as u64,
+            file_uri: None,
+        };
+        info!(%url, filename = %meta.filename, bytes = meta.size_bytes, "downloaded PR media attachment for Arm 3");
+        attachments.push(UploadedAttachmentBytes { meta, bytes });
+    }
+
+    attachments
+}
+
+fn extract_filename_from_url(url: &str, idx: usize) -> String {
+    let without_query = url.split(['?', '#']).next().unwrap_or(url);
+    without_query
+        .rsplit('/')
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.len() <= 128)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("pr-media-{idx}.bin"))
+}
+
+fn ensure_trailing_newline(s: &str) -> String {
+    if s.ends_with('\n') {
+        s.to_string()
+    } else {
+        format!("{s}\n")
+    }
+}
+
+fn truncate_tail(s: &str, max_chars: usize) -> String {
+    let trimmed = s.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let tail: String = trimmed.chars().rev().take(max_chars).collect();
+    format!("...{}", tail.chars().rev().collect::<String>())
 }
 
 fn build_problem_statement(ctx: &FetchedPrContext) -> String {
