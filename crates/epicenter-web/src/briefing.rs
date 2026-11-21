@@ -79,19 +79,19 @@ fn resolve_active_candidate<'a>(
 
 fn depth_tier_label(tier: StrategyDepthTier) -> &'static str {
     match tier {
-        StrategyDepthTier::SurgicalHotfix => "Surgical Hotfix",
+        StrategyDepthTier::SurgicalHotfix => "Quick Fix",
         StrategyDepthTier::TargetedRefactor => "Targeted Refactor",
-        StrategyDepthTier::ArchitecturalRootCause => "Architectural Root-Cause",
-        StrategyDepthTier::AlgorithmicOptimization => "Algorithmic Optimization",
+        StrategyDepthTier::ArchitecturalRootCause => "Root-Cause Fix",
+        StrategyDepthTier::AlgorithmicOptimization => "Perf Optimization",
     }
 }
 
 fn red_gate_badge_meta(resolution: RedGateResolution) -> (&'static str, &'static str) {
     match resolution {
-        RedGateResolution::VerifiedNeon => ("Red-Gate: Verified Neon", "badge badge-emerald"),
-        RedGateResolution::EscalatedCarbon => ("Red-Gate: Escalated Carbon", "badge badge-amber"),
+        RedGateResolution::VerifiedNeon => ("Repro Test Verified", "badge badge-emerald"),
+        RedGateResolution::EscalatedCarbon => ("Repro Test (Escalated)", "badge badge-amber"),
         RedGateResolution::CharacterizationFallback => {
-            ("Red-Gate: Characterization Fallback", "badge badge-violet")
+            ("Baseline Test", "badge badge-violet")
         }
     }
 }
@@ -101,6 +101,24 @@ fn badge_style(badge: CandidateBadge) -> &'static str {
         CandidateBadge::BestOverall => "badge badge-emerald",
         CandidateBadge::SafestEmergencyHotfix => "badge badge-cyan",
         CandidateBadge::FastestThroughput => "badge badge-amber",
+    }
+}
+
+fn badge_label(badge: CandidateBadge) -> &'static str {
+    match badge {
+        CandidateBadge::BestOverall => "★ Best Overall",
+        CandidateBadge::SafestEmergencyHotfix => "◆ Safest Fix",
+        CandidateBadge::FastestThroughput => "⚡ Fastest",
+    }
+}
+
+fn truncate_label(s: &str, max: usize) -> String {
+    let mut it = s.chars();
+    let out: String = it.by_ref().take(max).collect();
+    if it.next().is_some() {
+        format!("{out}…")
+    } else {
+        out
     }
 }
 
@@ -286,11 +304,10 @@ pub fn BriefingAndHandoffDeck(
                 <div>
                     <h2 class="panel-title">
                         <span class="model-dot dot-emerald"></span>
-                        "War-Room Briefing, Unified Diff & PR Handoff Deck"
-                        <span class="badge badge-violet">"Gemini 3.8 Flash TTS"</span>
+                        "Summary, Diff & Export"
                     </h2>
                     <div class="panel-subtitle">
-                        "Listen to the 2-speaker Architect vs. Auditor synthesis, inspect syntax-colored diffs, export patches, or open a 1-click GitHub PR."
+                        "Review the audio walkthrough, inspect code changes, or export the patch."
                     </div>
                 </div>
             </div>
@@ -299,17 +316,22 @@ pub fn BriefingAndHandoffDeck(
                 {move || match session.get() {
                     None => view! {
                         <div class="empty-state">
-                            "Launch or select a tournament session to inspect the 2-speaker war-room audio briefing, candidate diffs, and export controls."
+                            "Start or select a comparison to review the audio walkthrough, code diff, and export options."
                         </div>
                     }.into_any(),
                     Some(sess) => {
                         let is_failed = sess.stage == TournamentStage::Failed;
                         let sel_id = selected_strategy_id.get();
                         let active_cand = resolve_active_candidate(&sess, sel_id.as_deref()).cloned();
+                        let strategy_specs = sess
+                            .strategy_plan
+                            .as_ref()
+                            .map(|p| p.strategies.clone())
+                            .unwrap_or_default();
                         let active_spec = active_cand.as_ref().and_then(|c| {
-                            sess.strategy_plan
-                                .as_ref()
-                                .and_then(|p| p.strategies.iter().find(|s| s.id == c.strategy_id))
+                            strategy_specs
+                                .iter()
+                                .find(|s| s.id == c.strategy_id)
                                 .cloned()
                         });
                         let audio_url = sess
@@ -327,7 +349,7 @@ pub fn BriefingAndHandoffDeck(
                         let failed_red_gate_excerpt = match &sess.red_gate {
                             Some(RedGateSpec::Bug(bug)) if !bug.failure_excerpt.trim().is_empty() => {
                                 Some(format!(
-                                    "Red-Gate command: $ {}\nVerified fails on HEAD: {}\n\n{}",
+                                    "Repro test command: $ {}\nConfirmed failing before fix: {}\n\n{}",
                                     bug.test_command,
                                     bug.verified_fails_on_head,
                                     bug.failure_excerpt.trim()
@@ -341,7 +363,7 @@ pub fn BriefingAndHandoffDeck(
                             .find(|c| !c.test_output_tail.trim().is_empty())
                             .map(|c| {
                                 format!(
-                                    "Candidate `{}` output tail:\n{}",
+                                    "Candidate '{}' test output:\n{}",
                                     c.strategy_id,
                                     c.test_output_tail.trim()
                                 )
@@ -354,6 +376,7 @@ pub fn BriefingAndHandoffDeck(
                                     .filter(|e| {
                                         matches!(e.level, LogLevel::Error | LogLevel::Warn)
                                             || e.source.contains("failed")
+                                            || e.source.contains("repro")
                                             || e.source.contains("red-gate")
                                     })
                                     .rev()
@@ -397,22 +420,19 @@ pub fn BriefingAndHandoffDeck(
                                 <div class="honest-halt-banner" role="alert">
                                     <div class="honest-halt-head">
                                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                                            <span class="badge badge-red">"HONEST HALT · STAGE FAILED"</span>
+                                            <span class="badge badge-red">"STOPPED"</span>
                                             <strong class="honest-halt-title">
-                                                "Tournament Stopped Without Synthetic Fallback"
+                                                "Comparison Stopped Before Completion"
                                             </strong>
                                         </div>
-                                        <span class="mono" style="font-size:11px;color:#fca5a5;">
-                                            "Zero fabricated patches · Zero simulated passes"
-                                        </span>
                                     </div>
                                     <p class="honest-halt-body">
-                                        "Epicenter halted this session honestly because a real verification gate failed (for example, the reported bug could not be independently reproduced as a failing test on unmodified HEAD, or the host verifier / Gemini API could not validate any passing candidate). Rather than falling back to synthetic diffs or fabricating passing scores, execution stopped cleanly with full diagnostic telemetry below."
+                                        "This comparison stopped because a verification step failed (for example, the bug could not be reproduced with a failing test, or no candidate passed the test suite). See the captured output below for details."
                                     </p>
                                     {diagnostic_excerpt.map(|excerpt| view! {
-                                        <div style="margin-top:8px;">
+                                        <div style="margin-top:10px;">
                                             <span class="field-label" style="color:#fca5a5;">
-                                                "Captured Failure Excerpt & Telemetry"
+                                                "Captured Error Details"
                                             </span>
                                             <pre class="terminal-box" style="border-color:rgba(239,68,68,0.45);">{excerpt}</pre>
                                         </div>
@@ -421,12 +441,12 @@ pub fn BriefingAndHandoffDeck(
                             })}
 
                             <div class="briefing-grid">
-                                // Left Column: 2-Speaker War-Room TTS Audio + Transcript
+                                // Left Column: Audio Walkthrough + Transcript
                                 <div>
                                     <div class="audio-player-box">
                                         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-                                            <strong style="font-size:13px;">"Executive War-Room Audio Briefing"</strong>
-                                            <span class="badge badge-cyan">"Architect (Kore) × Auditor (Puck)"</span>
+                                            <strong style="font-size:13.5px;">"Audio Walkthrough"</strong>
+                                            <span class="badge badge-cyan">"2-Speaker Summary"</span>
                                         </div>
                                         {match audio_url {
                                             Some(url) => view! {
@@ -435,9 +455,9 @@ pub fn BriefingAndHandoffDeck(
                                             None => view! {
                                                 <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">
                                                     {if is_failed {
-                                                        "War-room audio briefing skipped — tournament halted prior to Stage 7."
+                                                        "Audio walkthrough skipped because this comparison stopped early."
                                                     } else {
-                                                        "Synthesizing 2-speaker WAV briefing at Stage 7 completion..."
+                                                        "Generating audio walkthrough..."
                                                     }}
                                                 </div>
                                             }.into_any(),
@@ -445,7 +465,7 @@ pub fn BriefingAndHandoffDeck(
                                     </div>
 
                                     <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
-                                        <span class="field-label" style="margin:0;">"War-Room Dialogue Transcript"</span>
+                                        <span class="field-label" style="margin:0;">"Transcript"</span>
                                         <span class="mono" style="font-size:11px;color:var(--text-dim);">
                                             {format!("{} turns", script.len())}
                                         </span>
@@ -455,9 +475,9 @@ pub fn BriefingAndHandoffDeck(
                                         view! {
                                             <div class="empty-state" style="padding:20px 14px;">
                                                 {if is_failed {
-                                                    "No war-room dialogue generated — session halted before Stage 7."
+                                                    "No transcript generated because this comparison stopped early."
                                                 } else {
-                                                    "2-speaker Architect vs. Auditor script will stream in once Stage 6/7 finishes."
+                                                    "Architect & Auditor walkthrough transcript will appear once auditing finishes."
                                                 }}
                                             </div>
                                         }.into_any()
@@ -472,14 +492,10 @@ pub fn BriefingAndHandoffDeck(
                                                         "dialogue-turn auditor"
                                                     };
                                                     let speaker_label = turn.speaker.label();
-                                                    let voice_label = turn.speaker.prebuilt_voice();
                                                     view! {
                                                         <div class=cls>
                                                             <div class="dialogue-speaker">
                                                                 <span>{speaker_label}</span>
-                                                                <span style="color:var(--text-dim);font-weight:500;">
-                                                                    {format!("voice:{voice_label}")}
-                                                                </span>
                                                             </div>
                                                             <p class="dialogue-text">{turn.text}</p>
                                                         </div>
@@ -490,7 +506,7 @@ pub fn BriefingAndHandoffDeck(
                                     }}
                                 </div>
 
-                                // Right Column: Red-Gate + Handoff + Syntax-Colored Diff + Test Output
+                                // Right Column: Repro Test + Export + Code Diff + Test Output
                                 <div>
                                     {red_gate.map(|rg| match rg {
                                         RedGateSpec::Bug(bug) => {
@@ -501,7 +517,7 @@ pub fn BriefingAndHandoffDeck(
                                                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                                             <span class=rg_cls>{rg_label}</span>
                                                             <span class=if bug.verified_fails_on_head { "badge badge-emerald" } else { "badge badge-amber" }>
-                                                                {if bug.verified_fails_on_head { "Verified Fails on HEAD" } else { "Unverified HEAD Failure" }}
+                                                                {if bug.verified_fails_on_head { "Confirmed Failing Before Fix" } else { "Unverified Failure" }}
                                                             </span>
                                                         </div>
                                                         <span class="mono" style="font-size:11px;color:var(--text-muted);">
@@ -520,7 +536,7 @@ pub fn BriefingAndHandoffDeck(
                                         RedGateSpec::Feature(feat) => view! {
                                             <div class="redgate-card">
                                                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                                                    <span class="badge badge-cyan">"Red-Gate: Feature Acceptance Contract"</span>
+                                                    <span class="badge badge-cyan">"Feature Acceptance Test"</span>
                                                     <span class="mono" style="font-size:11.5px;color:#94a3b8;">
                                                         {format!("$ {}", feat.test_command)}
                                                     </span>
@@ -532,8 +548,9 @@ pub fn BriefingAndHandoffDeck(
                                         }.into_any(),
                                     })}
 
-                                    {(!candidates_list.is_empty()).then(|| {
+                                    {(candidates_list.len() > 1).then(|| {
                                         let active_id_cmp = current_strategy_key.clone();
+                                        let specs_for_btns = strategy_specs.clone();
                                         view! {
                                             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
                                                 {candidates_list.into_iter().map(|c| {
@@ -541,6 +558,11 @@ pub fn BriefingAndHandoffDeck(
                                                     let cid_click = cid.clone();
                                                     let is_sel = cid == active_id_cmp;
                                                     let green = c.is_green();
+                                                    let label = specs_for_btns
+                                                        .iter()
+                                                        .find(|s| s.id == cid)
+                                                        .map(|s| truncate_label(&s.title, 26))
+                                                        .unwrap_or_else(|| cid.clone());
                                                     let btn_cls = if is_sel {
                                                         "btn btn-sm btn-primary"
                                                     } else {
@@ -553,7 +575,7 @@ pub fn BriefingAndHandoffDeck(
                                                             on:click=move |_| selected_strategy_id.set(Some(cid_click.clone()))
                                                         >
                                                             <span class=if green { "model-dot dot-emerald" } else { "model-dot dot-amber" }></span>
-                                                            <span class="mono">{cid}</span>
+                                                            <span>{label}</span>
                                                         </button>
                                                     }
                                                 }).collect_view()}
@@ -565,15 +587,19 @@ pub fn BriefingAndHandoffDeck(
                                         None => view! {
                                             <div class="empty-state">
                                                 {if is_failed {
-                                                    "No candidate patches produced — tournament halted cleanly at verification gate."
+                                                    "No candidate patches produced because this comparison stopped early."
                                                 } else {
-                                                    "Waiting for Gemini 4 Neon workers to produce candidate patches..."
+                                                    "Waiting for candidate patches..."
                                                 }}
                                             </div>
                                         }.into_any(),
                                         Some(cand) => {
                                             let cand_id = cand.strategy_id.clone();
                                             let cand_id_pr_match = cand_id.clone();
+                                            let heading_title = active_spec
+                                                .as_ref()
+                                                .map(|s| s.title.clone())
+                                                .unwrap_or_else(|| cand_id.clone());
                                             let diff_lines: Vec<String> = cand
                                                 .git_diff
                                                 .lines()
@@ -590,33 +616,31 @@ pub fn BriefingAndHandoffDeck(
 
                                             view! {
                                                 <div>
-                                                    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+                                                    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
                                                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                                                            <strong class="mono" style="font-size:13.5px;color:#f8fafc;">{cand_id.clone()}</strong>
+                                                            <strong style="font-size:14px;color:#f8fafc;">{heading_title}</strong>
                                                             {active_spec.as_ref().map(|spec| view! {
                                                                 <span class="badge badge-cyan">{depth_tier_label(spec.depth_tier)}</span>
                                                             })}
                                                             {cand.badges.iter().map(|b| view! {
-                                                                <span class=badge_style(*b)>{b.label()}</span>
+                                                                <span class=badge_style(*b)>{badge_label(*b)}</span>
                                                             }).collect_view()}
                                                             {cand.pareto_optimal.then(|| view! {
-                                                                <span class="badge badge-violet">"Pareto Optimal"</span>
+                                                                <span class="badge badge-violet">"Top Trade-Off"</span>
                                                             })}
                                                         </div>
                                                         <div style="display:flex;align-items:center;gap:6px;">
                                                             <span class=if cand.repro_passed { "badge badge-emerald" } else { "badge badge-red" }>
-                                                                {if cand.repro_passed { "Repro PASS" } else { "Repro FAIL" }}
+                                                                {if cand.repro_passed { "Repro Passed" } else { "Repro Failed" }}
                                                             </span>
                                                             <span class=if cand.regression_suite_passed { "badge badge-emerald" } else { "badge badge-red" }>
-                                                                {if cand.regression_suite_passed { "Suite PASS" } else { "Suite FAIL" }}
+                                                                {if cand.regression_suite_passed { "Suite Passed" } else { "Suite Failed" }}
                                                             </span>
                                                         </div>
                                                     </div>
 
-                                                    {active_spec.as_ref().map(|spec| view! {
-                                                        <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">
-                                                            <strong style="color:var(--text);">{spec.title.clone()}</strong>
-                                                            " — "
+                                                    {active_spec.as_ref().filter(|s| !s.thesis.trim().is_empty()).map(|spec| view! {
+                                                        <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:12px;">
                                                             {spec.thesis.clone()}
                                                         </div>
                                                     })}
@@ -636,7 +660,7 @@ pub fn BriefingAndHandoffDeck(
                                                             disabled=move || action_busy.get().is_some()
                                                             on:click=on_download_audit
                                                         >
-                                                            "Download BLAST_RADIUS_AUDIT.md"
+                                                            "Download Audit Report"
                                                         </button>
                                                         <button
                                                             type="button"
@@ -651,9 +675,9 @@ pub fn BriefingAndHandoffDeck(
                                                             class="btn btn-emerald btn-sm"
                                                             style="margin-left:auto;"
                                                             title=move || if has_github_token.get() {
-                                                                "Create branch, commit diff, and open GitHub PR via server GITHUB_TOKEN"
+                                                                "Create a branch, commit this diff, and open a GitHub PR"
                                                             } else {
-                                                                "Set GITHUB_TOKEN on epicenter-server to enable 1-click GitHub PR handoff"
+                                                                "Configure GITHUB_TOKEN to enable creating GitHub PRs"
                                                             }
                                                             disabled=move || !has_github_token.get() || action_busy.get().is_some()
                                                             on:click=on_open_github_pr
@@ -697,7 +721,7 @@ pub fn BriefingAndHandoffDeck(
                                                     })}
 
                                                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                                                        <span class="field-label" style="margin:0;">"Unified Git Diff"</span>
+                                                        <span class="field-label" style="margin:0;">"Code Diff"</span>
                                                         <span class="mono" style="font-size:11px;">
                                                             <span style="color:#6ee7b7;">{format!("+{added_count}")}</span>
                                                             " / "
@@ -744,7 +768,7 @@ pub fn BriefingAndHandoffDeck(
 
                                                     {(!cand.test_output_tail.trim().is_empty()).then(|| view! {
                                                         <div style="margin-top:12px;">
-                                                            <span class="field-label">"Verification Test Output Tail"</span>
+                                                            <span class="field-label">"Test Output"</span>
                                                             <pre class="terminal-box">{cand.test_output_tail}</pre>
                                                         </div>
                                                     })}

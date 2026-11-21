@@ -15,23 +15,23 @@ const RIPPLE_STYLES: &str = r#"
 .epi-ripple-card {
   background: #0f1624;
   border: 1px solid #1e293b;
-  border-radius: 14px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 20px 22px;
   color: #e2e8f0;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
+  gap: 16px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
 }
 .epi-ripple-header {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 12px;
   border-bottom: 1px solid #1e293b;
-  padding-bottom: 12px;
+  padding-bottom: 14px;
 }
 .epi-ripple-title-group {
   display: flex;
@@ -42,15 +42,15 @@ const RIPPLE_STYLES: &str = r#"
   margin: 0;
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
   color: #f8fafc;
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .epi-ripple-subtitle {
-  font-size: 12px;
+  font-size: 12.5px;
   color: #94a3b8;
   display: flex;
   flex-wrap: wrap;
@@ -339,18 +339,18 @@ fn select_active_candidate<'a>(
 
 fn depth_tier_label(tier: StrategyDepthTier) -> &'static str {
     match tier {
-        StrategyDepthTier::SurgicalHotfix => "Surgical Hotfix",
+        StrategyDepthTier::SurgicalHotfix => "Quick Fix",
         StrategyDepthTier::TargetedRefactor => "Targeted Refactor",
-        StrategyDepthTier::ArchitecturalRootCause => "Architectural Root-Cause",
-        StrategyDepthTier::AlgorithmicOptimization => "Algorithmic Opt",
+        StrategyDepthTier::ArchitecturalRootCause => "Root-Cause Fix",
+        StrategyDepthTier::AlgorithmicOptimization => "Perf Optimization",
     }
 }
 
 fn ring_label(ring: ImpactRing) -> &'static str {
     match ring {
-        ImpactRing::Ring0 => "Ring 0 · Epicenter",
-        ImpactRing::Ring1 => "Ring 1 · Direct Caller",
-        ImpactRing::Ring2 => "Ring 2 · Transitive Entrypoint",
+        ImpactRing::Ring0 => "Modified Code",
+        ImpactRing::Ring1 => "Direct Caller",
+        ImpactRing::Ring2 => "Indirect Entrypoint",
     }
 }
 
@@ -557,19 +557,22 @@ pub fn BlastRadiusRippleMap(
                     return view! {
                         <div class="epi-ripple-header">
                             <div class="epi-ripple-title-group">
-                                <h2 class="epi-ripple-title">"Blast-Radius Seismograph"</h2>
-                                <div class="epi-ripple-subtitle">"Concentric Ring 0 · Ring 1 · Ring 2 AST & Coverage Detector"</div>
+                                <h2 class="epi-ripple-title">
+                                    <span class="model-dot dot-cyan"></span>
+                                    "Code Impact Map"
+                                </h2>
+                                <div class="epi-ripple-subtitle">"Modified code, direct callers, indirect entrypoints, and test coverage."</div>
                             </div>
                         </div>
                         <div class="epi-ripple-stage">
                             <div class="epi-empty-radar">
-                                <svg viewBox="-120 -120 240 240" width="160" height="160">
+                                <svg viewBox="-120 -120 240 240" width="144" height="144">
                                     <circle cx="0" cy="0" r="102" fill="none" stroke="#1e293b" stroke-dasharray="5 5" />
                                     <circle cx="0" cy="0" r="62" fill="none" stroke="#1e293b" stroke-dasharray="4 4" />
                                     <circle cx="0" cy="0" r="24" fill="rgba(56,189,248,0.12)" stroke="#38bdf8" stroke-dasharray="3 3" />
                                     <circle cx="0" cy="0" r="6" fill="#38bdf8" />
                                 </svg>
-                                <div>"Start a tournament or open a session to inspect symbol blast radius and untested dark zones."</div>
+                                <div>"Start or select a comparison to inspect affected code, callers, and test coverage."</div>
                             </div>
                         </div>
                     }.into_any();
@@ -580,13 +583,16 @@ pub fn BlastRadiusRippleMap(
                     return view! {
                         <div class="epi-ripple-header">
                             <div class="epi-ripple-title-group">
-                                <h2 class="epi-ripple-title">"Blast-Radius Seismograph"</h2>
-                                <div class="epi-ripple-subtitle">{format!("Session: {}", sess.intake.title)}</div>
+                                <h2 class="epi-ripple-title">
+                                    <span class="model-dot dot-cyan"></span>
+                                    "Code Impact Map"
+                                </h2>
+                                <div class="epi-ripple-subtitle">{sess.intake.title}</div>
                             </div>
                         </div>
                         <div class="epi-ripple-stage">
                             <div class="epi-empty-radar">
-                                <div>"No candidate strategies generated yet. Waiting for Stage 3/4 workers…"</div>
+                                <div>"Waiting for candidate approaches to be built..."</div>
                             </div>
                         </div>
                     }.into_any();
@@ -609,15 +615,15 @@ pub fn BlastRadiusRippleMap(
                         <div class="epi-ripple-header">
                             <div class="epi-ripple-title-group">
                                 <h2 class="epi-ripple-title">
-                                    "Blast-Radius Seismograph"
-                                    <span class="epi-pill epi-pill-cyan">{candidate.strategy_id.clone()}</span>
+                                    <span class="model-dot dot-cyan"></span>
+                                    "Code Impact Map"
                                 </h2>
                                 <div class="epi-ripple-subtitle">{strategy_title}</div>
                             </div>
                         </div>
                         <div class="epi-ripple-stage">
                             <div class="epi-empty-radar">
-                                <div>"Awaiting Stage 6 AST Call-Graph, Coverage Overlay & Gemini 4 Carbon Audit…"</div>
+                                <div>"Running code impact and test coverage audit..."</div>
                             </div>
                         </div>
                     }.into_any();
@@ -735,11 +741,11 @@ fn render_blast_report_view(
         <div class="epi-ripple-header">
             <div class="epi-ripple-title-group">
                 <h2 class="epi-ripple-title">
-                    "Blast-Radius Seismograph"
-                    <span class="epi-pill epi-pill-cyan">{candidate.strategy_id.clone()}</span>
+                    <span class="model-dot dot-cyan"></span>
+                    "Code Impact Map"
                 </h2>
                 <div class="epi-ripple-subtitle">
-                    <span>{strategy_title}</span>
+                    <span style="color:#e2e8f0; font-weight:600;">{strategy_title}</span>
                     {depth_tier_pill.map(|tier| view! {
                         <span class="epi-pill epi-pill-violet">{tier}</span>
                     })}
@@ -759,20 +765,20 @@ fn render_blast_report_view(
         </div>
 
         <div class="epi-ripple-metrics-strip">
-            <span class=risk_pill_class>{format!("Impact Risk: {:.1}/100", composite_risk)}</span>
-            <span class=depth_pill_class>{format!("Root-Cause Depth: {:.1}/100", root_cause_depth)}</span>
-            <span class="epi-pill">{format!("Symbols: {total_nodes} (R0:{} · R1:{} · R2:{})", report.ring0_mutated.len(), report.ring1_direct_callers.len(), report.ring2_transitive_entrypoints.len())}</span>
+            <span class=risk_pill_class>{format!("Impact Risk: {:.0}/100", composite_risk)}</span>
+            <span class=depth_pill_class>{format!("Root-Cause Depth: {:.0}/100", root_cause_depth)}</span>
+            <span class="epi-pill">{format!("Symbols: {total_nodes} (Modified: {} · Direct: {} · Indirect: {})", report.ring0_mutated.len(), report.ring1_direct_callers.len(), report.ring2_transitive_entrypoints.len())}</span>
             <span class=dark_zone_pill_class>
-                {format!("Dark Zones: {dark_zones}")}
+                {format!("Untested Callers: {dark_zones}")}
             </span>
             <span class=hazard_pill_class>
-                {format!("Carbon Hazards: {hazard_count}")}
+                {format!("Code Hazards: {hazard_count}")}
             </span>
         </div>
 
         {bandaid_warning.map(|warning| view! {
             <div class="epi-bandaid-alert">
-                <span class="epi-bandaid-title">"⚠ Carbon Bandaid Debt Warning"</span>
+                <span class="epi-bandaid-title">"Shallow Fix Warning"</span>
                 <span>{warning}</span>
             </div>
         })}
@@ -846,13 +852,13 @@ fn render_blast_report_view(
 
                     // Ring Labels
                     <text x="0" y="-288" text-anchor="middle" fill="#64748b" font-size="10" font-weight="700" letter-spacing="1.4">
-                        "RING 2 · TRANSITIVE ENTRYPOINTS (r=280)"
+                        "INDIRECT ENTRYPOINTS"
                     </text>
                     <text x="0" y="-168" text-anchor="middle" fill="#38bdf8" fill-opacity="0.75" font-size="10" font-weight="700" letter-spacing="1.2">
-                        "RING 1 · DIRECT CALLERS (r=160)"
+                        "DIRECT CALLERS"
                     </text>
                     <text x="0" y="-64" text-anchor="middle" fill="#a78bfa" font-size="9.5" font-weight="700" letter-spacing="1.1">
-                        "RING 0 · EPICENTER (r=56)"
+                        "MODIFIED CODE"
                     </text>
 
                     // Directed edges highlighting connected caller/callee chains
@@ -945,14 +951,14 @@ fn render_blast_report_view(
 
                                 let cov_badge = if node.ring == ImpactRing::Ring0 {
                                     match node.test_coverage_pct {
-                                        Some(pct) => format!("EPICENTER · {:.0}%", pct),
-                                        None => "EPICENTER".to_string(),
+                                        Some(pct) => format!("MODIFIED · {:.0}%", pct),
+                                        None => "MODIFIED".to_string(),
                                     }
                                 } else if node.is_untested_dark_zone {
-                                    "0% COV".to_string()
+                                    "0% TESTED".to_string()
                                 } else {
                                     match node.test_coverage_pct {
-                                        Some(pct) => format!("{:.0}% COV", pct),
+                                        Some(pct) => format!("{:.0}% TESTED", pct),
                                         None => "CALLER".to_string(),
                                     }
                                 };
@@ -1109,19 +1115,19 @@ fn render_blast_report_view(
         <div class="epi-ripple-legend">
             <span class="epi-legend-item">
                 <span class="epi-legend-dot" style="background: #38bdf8; box-shadow: 0 0 8px #a78bfa;"></span>
-                "Ring 0 Mutated (Cyan/Violet)"
+                "Modified Code"
             </span>
             <span class="epi-legend-item">
                 <span class="epi-legend-dot" style="background: #10b981; box-shadow: 0 0 8px #10b981;"></span>
-                "Covered Caller (Emerald)"
+                "Covered Caller"
             </span>
             <span class="epi-legend-item">
                 <span class="epi-legend-dot" style="background: #ef4444; box-shadow: 0 0 8px #f59e0b;"></span>
-                "Untested Dark Zone (0% COV)"
+                "Untested Caller (0%)"
             </span>
             <span class="epi-legend-item">
                 <span class="epi-legend-dot" style="background: #ef4444; border: 1px solid #fff;"></span>
-                "! Carbon Semantic Hazard"
+                "! Code Hazard"
             </span>
         </div>
 
@@ -1151,11 +1157,11 @@ fn render_blast_report_view(
                                 "#64748b"
                             };
                             let cov_text = if node.is_untested_dark_zone {
-                                "0.0% · UNTESTED DARK ZONE".to_string()
+                                "0% (Untested)".to_string()
                             } else {
                                 match cov_pct {
-                                    Some(p) => format!("{:.1}% line coverage", p),
-                                    None => "Coverage telemetry not reported".to_string(),
+                                    Some(p) => format!("{:.0}% line coverage", p),
+                                    None => "Not measured".to_string(),
                                 }
                             };
 
@@ -1203,17 +1209,15 @@ fn render_blast_report_view(
                                     </div>
                                     <div style="display:flex; flex-wrap:wrap; gap:6px;">
                                         <span class=ring_class>{ring_label(node.ring)}</span>
-                                        {if node.is_untested_dark_zone {
-                                            view! { <span class="epi-pill epi-pill-red">"DARK ZONE · 0% COV"</span> }.into_any()
-                                        } else {
-                                            view! { <span class="epi-pill epi-pill-emerald">{cov_text.clone()}</span> }.into_any()
-                                        }}
+                                        {node.is_untested_dark_zone.then(|| view! {
+                                            <span class="epi-pill epi-pill-red">"Untested Caller"</span>
+                                        })}
                                     </div>
                                 </div>
 
                                 <div style="display:flex; flex-direction:column; gap:4px;">
-                                    <div style="display:flex; justify-content:space-between; font-size:11px; color:#94a3b8;">
-                                        <span>"Symbol Coverage"</span>
+                                    <div style="display:flex; justify-content:space-between; font-size:11.5px; color:#94a3b8;">
+                                        <span>"Test Coverage"</span>
                                         <span style=format!("color:{cov_color}; font-weight:600;")>{cov_text}</span>
                                     </div>
                                     <div class="epi-cov-bar-track">
@@ -1226,7 +1230,7 @@ fn render_blast_report_view(
 
                                 {(!incoming.is_empty()).then(|| view! {
                                     <div class="epi-neighbor-row">
-                                        <span>"Incoming callers:"</span>
+                                        <span>"Called by:"</span>
                                         {incoming.into_iter().map(|(id, sym, rel)| {
                                             let jump_id = id.clone();
                                             view! {
@@ -1244,7 +1248,7 @@ fn render_blast_report_view(
 
                                 {(!outgoing.is_empty()).then(|| view! {
                                     <div class="epi-neighbor-row">
-                                        <span>"Targets:"</span>
+                                        <span>"Calls:"</span>
                                         {outgoing.into_iter().map(|(id, sym, rel)| {
                                             let jump_id = id.clone();
                                             view! {
@@ -1262,12 +1266,12 @@ fn render_blast_report_view(
 
                                 <div class="epi-hazard-list">
                                     <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8;">
-                                        {format!("Gemini 4 Carbon Semantic Hazards ({} on this symbol)", matching_hazards.len())}
+                                        {format!("Code Hazards ({} on this symbol)", matching_hazards.len())}
                                     </div>
                                     {if matching_hazards.is_empty() {
                                         view! {
                                             <div style="font-size:12px; color:#64748b;">
-                                                "No direct semantic hazards flagged on this symbol."
+                                                "No hazards flagged on this symbol."
                                             </div>
                                         }.into_any()
                                     } else {
@@ -1276,7 +1280,7 @@ fn render_blast_report_view(
 
                                     {(!other_hazards.is_empty()).then(|| view! {
                                         <div style="margin-top:6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8;">
-                                            {format!("Other Candidate Hazards ({})", other_hazards.len())}
+                                            {format!("Other Hazards ({})", other_hazards.len())}
                                         </div>
                                         {other_hazards.into_iter().map(render_hazard_item).collect_view()}
                                     })}
@@ -1285,7 +1289,7 @@ fn render_blast_report_view(
                         }
                         None => view! {
                             <div style="font-size:12px; color:#94a3b8;">
-                                "No AST symbols extracted for this diff yet."
+                                "No symbols extracted for this diff yet."
                             </div>
                         }.into_any(),
                     }}

@@ -463,14 +463,14 @@ pub fn apply_live_event(session: &mut TournamentSession, event: &LiveEvent) -> b
     }
 }
 
-/// Converts any `LiveEvent` into a crisp human-readable entry for the streaming telemetry drawer.
+/// Converts any `LiveEvent` into a crisp human-readable entry for the streaming Agent Trace drawer.
 pub fn live_event_to_log(event: &LiveEvent) -> TelemetryLogEntry {
     match event {
         LiveEvent::SessionCreated { timestamp, .. } => TelemetryLogEntry {
             timestamp: *timestamp,
             level: LogLevel::Info,
             source: "orchestrator".to_string(),
-            message: "Tournament session initialized.".to_string(),
+            message: "Comparison session initialized.".to_string(),
         },
         LiveEvent::StageChanged { stage, message, .. } => TelemetryLogEntry {
             timestamp: Utc::now(),
@@ -485,9 +485,9 @@ pub fn live_event_to_log(event: &LiveEvent) -> TelemetryLogEntry {
         LiveEvent::IntakeReady { brief, .. } => TelemetryLogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
-            source: "hydrogen".to_string(),
+            source: "intake".to_string(),
             message: format!(
-                "Intake synthesized: '{}' ({} findings, {} suspect files)",
+                "Intake complete: '{}' ({} findings, {} relevant files)",
                 brief.title,
                 brief.multimodal_findings.len(),
                 brief.suspect_files.len()
@@ -496,15 +496,15 @@ pub fn live_event_to_log(event: &LiveEvent) -> TelemetryLogEntry {
         LiveEvent::RedGateVerified { red_gate, .. } => TelemetryLogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
-            source: "red-gate".to_string(),
-            message: format!("Red-Gate locked with command `{}`", red_gate.test_command()),
+            source: "repro-test".to_string(),
+            message: format!("Repro test locked with command `{}`", red_gate.test_command()),
         },
         LiveEvent::StrategyPlanReady { plan, .. } => TelemetryLogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
-            source: "carbon-architect".to_string(),
+            source: "planner".to_string(),
             message: format!(
-                "Planned K={} orthogonal strategies ({})",
+                "Planned {} distinct approaches ({})",
                 plan.strategies.len(),
                 plan.shared_benchmark_spec.name
             ),
@@ -521,13 +521,13 @@ pub fn live_event_to_log(event: &LiveEvent) -> TelemetryLogEntry {
             } else {
                 LogLevel::Info
             },
-            source: format!("neon::{strategy_id}"),
+            source: format!("worker::{strategy_id}"),
             message: format!("[{status:?}] {detail}"),
         },
         LiveEvent::CandidateUpdated { candidate, .. } => TelemetryLogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
-            source: format!("neon::{}", candidate.strategy_id),
+            source: format!("worker::{}", candidate.strategy_id),
             message: format!(
                 "Candidate updated: status={:?}, repro={}, regression={}",
                 candidate.status, candidate.repro_passed, candidate.regression_suite_passed
@@ -542,7 +542,7 @@ pub fn live_event_to_log(event: &LiveEvent) -> TelemetryLogEntry {
         } => TelemetryLogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Debug,
-            source: format!("arena::{strategy_id}"),
+            source: format!("benchmark::{strategy_id}"),
             message: format!(
                 "Trial #{trial_index}: baseline={baseline_ms:.2}ms vs candidate={candidate_ms:.2}ms"
             ),
@@ -554,21 +554,20 @@ pub fn live_event_to_log(event: &LiveEvent) -> TelemetryLogEntry {
         } => TelemetryLogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
-            source: format!("arena::{strategy_id}"),
+            source: format!("benchmark::{strategy_id}"),
             message: format!(
-                "Arena complete: p50={:.2}ms p95={:.2}ms speedup={:+.1}%",
+                "Benchmark complete: p50={:.2}ms, p95={:.2}ms, speedup={:+.1}%",
                 metrics.p50_ms, metrics.p95_ms, metrics.speedup_pct
             ),
         },
         LiveEvent::ArenaCompleted { summary, .. } => TelemetryLogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
-            source: "arena".to_string(),
+            source: "benchmark".to_string(),
             message: format!(
-                "Benchmark complete ({} trials): Pareto frontier {:?}, recommended {:?}",
+                "Benchmarking finished ({} trials): recommended {}",
                 summary.trials_per_candidate,
-                summary.pareto_frontier_ids,
-                summary.recommended_strategy_id
+                summary.recommended_strategy_id.as_deref().unwrap_or("none")
             ),
         },
         LiveEvent::BlastRadiusReady {
@@ -578,9 +577,9 @@ pub fn live_event_to_log(event: &LiveEvent) -> TelemetryLogEntry {
         } => TelemetryLogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
-            source: format!("graph::{strategy_id}"),
+            source: format!("impact::{strategy_id}"),
             message: format!(
-                "Blast radius mapped: {} nodes, {} dark zones, risk={:.1}",
+                "Impact mapped: {} symbols, {} untested callers, risk={:.1}/100",
                 report.total_nodes(),
                 report.dark_zone_count(),
                 report.composite_risk_score
@@ -598,17 +597,17 @@ pub fn live_event_to_log(event: &LiveEvent) -> TelemetryLogEntry {
             } else {
                 LogLevel::Warn
             },
-            source: format!("carbon-audit::{strategy_id}"),
+            source: format!("risk-audit::{strategy_id}"),
             message: format!(
-                "Semantic audit complete: {} hazards, composite risk={composite_risk_score:.1}",
+                "Risk audit complete: {} hazards, impact risk={composite_risk_score:.1}/100",
                 hazards.len()
             ),
         },
         LiveEvent::AudioBriefingReady { audio_url, .. } => TelemetryLogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
-            source: "flash-tts".to_string(),
-            message: format!("2-speaker war-room audio briefing ready ({audio_url})"),
+            source: "summary".to_string(),
+            message: format!("Audio walkthrough ready ({audio_url})"),
         },
         LiveEvent::TournamentCompleted {
             recommended_strategy_id,
@@ -618,7 +617,7 @@ pub fn live_event_to_log(event: &LiveEvent) -> TelemetryLogEntry {
             level: LogLevel::Info,
             source: "orchestrator".to_string(),
             message: format!(
-                "Tournament completed! Crowned winner: {}",
+                "Comparison completed. Recommended approach: {}",
                 recommended_strategy_id.as_deref().unwrap_or("none")
             ),
         },

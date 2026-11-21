@@ -1,4 +1,4 @@
-// Owned by `neon-web-viz`: 5-Sigma 3-Way Evaluation Ladder dashboard + Live Merged GitHub PR Judge mode.
+// Live PR Benchmark & Evaluation Results dashboard.
 use std::collections::HashSet;
 
 use epicenter_common::{
@@ -21,52 +21,53 @@ const EVAL_STYLES: &str = r#"
 .epi-eval-wrap {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 22px;
   color: #e2e8f0;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .epi-eval-card {
   background: #0f1624;
   border: 1px solid #1e293b;
-  border-radius: 14px;
-  padding: 18px;
+  border-radius: 12px;
+  padding: 20px 22px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
+  gap: 18px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
 }
 .epi-eval-head {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 12px;
   border-bottom: 1px solid #1e293b;
-  padding-bottom: 12px;
+  padding-bottom: 14px;
 }
 .epi-eval-title {
   margin: 0;
   font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
   color: #f8fafc;
 }
 .epi-eval-sub {
-  font-size: 12px;
+  font-size: 12.5px;
   color: #94a3b8;
   margin-top: 3px;
+  line-height: 1.45;
 }
 .epi-eval-btn {
   background: #131d31;
   color: #e2e8f0;
   border: 1px solid #334155;
   border-radius: 8px;
-  padding: 7px 14px;
-  font-size: 12px;
+  padding: 8px 14px;
+  font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
   transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+  white-space: nowrap;
 }
 .epi-eval-btn:hover:not(:disabled) {
   border-color: #38bdf8;
@@ -86,6 +87,36 @@ const EVAL_STYLES: &str = r#"
 .epi-eval-btn-primary:hover:not(:disabled) {
   filter: brightness(1.08);
   color: #04101a;
+}
+
+.epi-judge-box {
+  background: linear-gradient(145deg, rgba(14, 165, 233, 0.08), rgba(16, 185, 129, 0.05));
+  border: 1px solid rgba(56, 189, 248, 0.34);
+  border-radius: 12px;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.epi-judge-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.epi-judge-input {
+  flex: 1 1 320px;
+  background: #080d18;
+  color: #f8fafc;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 10px 13px;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  outline: none;
+}
+.epi-judge-input:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
 }
 
 .epi-filter-bar {
@@ -114,163 +145,286 @@ const EVAL_STYLES: &str = r#"
   color: #38bdf8;
 }
 
+.epi-legend-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  padding: 10px 14px;
+  background: #0b1220;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: #cbd5e1;
+}
+.epi-legend-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.epi-legend-desc {
+  color: #64748b;
+  font-size: 11.5px;
+}
+.epi-arm-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
 .epi-metric-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
 }
 .epi-metric-card {
   background: #0b1220;
   border: 1px solid #1e293b;
-  border-radius: 11px;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.epi-metric-name {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #94a3b8;
-}
-.epi-arm-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-.epi-arm-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  display: inline-block;
-  margin-right: 6px;
-}
-
-.epi-chart-frame {
-  background: #080d18;
-  border: 1px solid #1e293b;
-  border-radius: 12px;
-  padding: 12px;
-}
-.epi-chart-svg {
-  width: 100%;
-  height: auto;
-  display: block;
-}
-
-.epi-judge-box {
-  background: linear-gradient(145deg, rgba(14, 165, 233, 0.08), rgba(16, 185, 129, 0.07));
-  border: 1px solid rgba(56, 189, 248, 0.35);
-  border-radius: 14px;
-  padding: 18px;
+  border-radius: 10px;
+  padding: 15px 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
-.epi-judge-form {
+.epi-metric-head {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  flex-direction: column;
+  gap: 2px;
 }
-.epi-judge-input {
-  flex: 1 1 320px;
-  background: #080d18;
-  color: #f8fafc;
-  border: 1px solid #334155;
-  border-radius: 9px;
-  padding: 9px 12px;
+.epi-metric-name {
   font-size: 13px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  outline: none;
+  font-weight: 700;
+  color: #f8fafc;
 }
-.epi-judge-input:focus {
-  border-color: #38bdf8;
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.18);
+.epi-metric-hint {
+  font-size: 11.5px;
+  color: #64748b;
+}
+.epi-bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.epi-bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.epi-bar-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+.epi-bar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #cbd5e1;
+}
+.epi-bar-val {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+.epi-bar-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: #162033;
+  overflow: hidden;
+}
+.epi-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 220ms ease;
 }
 
 .epi-rubric-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
 }
 .epi-finding-card {
   background: #0b1220;
   border: 1px solid #1e293b;
   border-left: 3px solid #38bdf8;
   border-radius: 10px;
-  padding: 12px;
+  padding: 13px 14px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
+  gap: 7px;
+  font-size: 12.5px;
 }
 .epi-finding-step {
   color: #cbd5e1;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 .epi-failure-pill {
-  background: rgba(239, 68, 68, 0.10);
-  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.3);
   border-radius: 9px;
-  padding: 9px 11px;
-  font-size: 12px;
+  padding: 10px 12px;
+  font-size: 12.5px;
   color: #fecaca;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
-.epi-table-scroll {
-  overflow-x: auto;
+/* ── Human-Readable Per-PR Comparison Cards ────────────────────── */
+.epi-case-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.epi-case-card {
+  background: #0b1220;
   border: 1px solid #1e293b;
   border-radius: 11px;
+  overflow: hidden;
 }
-.epi-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-  text-align: left;
+.epi-case-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  background: #111a2c;
+  border-bottom: 1px solid #1e293b;
 }
-.epi-table th {
-  background: #0b1220;
+.epi-case-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f8fafc;
+  line-height: 1.35;
+}
+.epi-case-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+.epi-arm-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px 16px;
+}
+@media (max-width: 980px) {
+  .epi-arm-compare-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.epi-arm-box {
+  background: #0f1624;
+  border: 1px solid #1e293b;
+  border-radius: 9px;
+  padding: 12px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.epi-arm-box.winner {
+  border-color: rgba(16, 185, 129, 0.38);
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.06), #0f1624 55%);
+}
+.epi-arm-box-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.epi-arm-box-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+.epi-arm-subrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
   color: #94a3b8;
-  font-size: 10.5px;
+}
+.epi-arm-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #1e293b;
+}
+.epi-arm-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.epi-arm-stat-label {
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 10px 12px;
-  border-bottom: 1px solid #1e293b;
-  white-space: nowrap;
+  color: #64748b;
 }
-.epi-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid #1e293b;
-  vertical-align: top;
+.epi-arm-stat-val {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: #e2e8f0;
 }
-.epi-table tr:last-child td {
-  border-bottom: none;
+.epi-cause-box {
+  font-size: 12px;
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 7px;
+  padding: 6px 9px;
+  line-height: 1.4;
 }
-.epi-table tr:hover td {
-  background: rgba(56, 189, 248, 0.04);
+.epi-note-text {
+  font-size: 11.5px;
+  color: #94a3b8;
+  line-height: 1.45;
 }
+.epi-note-details {
+  font-size: 11.5px;
+  color: #94a3b8;
+}
+.epi-note-details summary {
+  cursor: pointer;
+  color: #7dd3fc;
+  font-weight: 600;
+  user-select: none;
+}
+.epi-note-details p {
+  margin: 6px 0 0;
+  line-height: 1.45;
+  color: #cbd5e1;
+}
+
 .epi-badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 7px;
+  padding: 3px 8px;
   border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   border: 1px solid #1e293b;
   background: #0b1220;
   color: #cbd5e1;
 }
-.epi-badge-pass { color: #10b981; border-color: rgba(16, 185, 129, 0.42); background: rgba(16, 185, 129, 0.12); }
-.epi-badge-fail { color: #ef4444; border-color: rgba(239, 68, 68, 0.42); background: rgba(239, 68, 68, 0.12); }
-.epi-badge-cyan { color: #38bdf8; border-color: rgba(56, 189, 248, 0.42); background: rgba(56, 189, 248, 0.10); }
-.epi-badge-amber { color: #f59e0b; border-color: rgba(245, 158, 11, 0.42); background: rgba(245, 158, 11, 0.12); }
-.epi-badge-violet { color: #a78bfa; border-color: rgba(167, 139, 250, 0.42); background: rgba(167, 139, 250, 0.12); }
+.epi-badge-pass { color: #6ee7b7; border-color: rgba(16, 185, 129, 0.42); background: rgba(16, 185, 129, 0.14); }
+.epi-badge-fail { color: #fca5a5; border-color: rgba(239, 68, 68, 0.42); background: rgba(239, 68, 68, 0.14); }
+.epi-badge-cyan { color: #7dd3fc; border-color: rgba(56, 189, 248, 0.38); background: rgba(56, 189, 248, 0.10); }
+.epi-badge-amber { color: #fcd34d; border-color: rgba(245, 158, 11, 0.42); background: rgba(245, 158, 11, 0.12); }
+.epi-badge-violet { color: #c4b5fd; border-color: rgba(167, 139, 250, 0.42); background: rgba(167, 139, 250, 0.12); }
 
 .epi-err-banner {
   background: rgba(239, 68, 68, 0.12);
@@ -278,23 +432,21 @@ const EVAL_STYLES: &str = r#"
   border-radius: 9px;
   padding: 10px 12px;
   color: #fca5a5;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 .epi-sim-warning {
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.22), rgba(245, 158, 11, 0.22));
-  border: 1.5px solid #f59e0b;
-  border-left: 5px solid #ef4444;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(245, 158, 11, 0.18));
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  border-left: 4px solid #ef4444;
   border-radius: 10px;
   padding: 12px 14px;
   color: #fef3c7;
   font-size: 12.5px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.45;
-  letter-spacing: 0.01em;
   display: flex;
   align-items: center;
   gap: 10px;
-  box-shadow: 0 0 20px rgba(239, 68, 68, 0.18);
 }
 .epi-live-pill {
   display: inline-flex;
@@ -302,21 +454,18 @@ const EVAL_STYLES: &str = r#"
   gap: 6px;
   padding: 4px 11px;
   border-radius: 999px;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  font-weight: 700;
   color: #6ee7b7;
-  background: rgba(16, 185, 129, 0.16);
-  border: 1px solid rgba(16, 185, 129, 0.55);
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.18);
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.45);
 }
 .epi-sha-badge {
   display: inline-flex;
   align-items: center;
   padding: 2px 7px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   color: #cbd5e1;
@@ -329,10 +478,11 @@ const EVAL_STYLES: &str = r#"
   color: #38bdf8;
 }
 .epi-empty-state {
-  padding: 32px 16px;
+  padding: 32px 20px;
   text-align: center;
   color: #94a3b8;
   font-size: 13px;
+  line-height: 1.5;
   background: #0b1220;
   border: 1px dashed #1e293b;
   border-radius: 10px;
@@ -357,17 +507,95 @@ fn arm_color(arm: EvalArm) -> &'static str {
 
 fn arm_short_label(arm: EvalArm) -> &'static str {
     match arm {
-        EvalArm::SingleModelCall => "Arm 1 · Single Model",
-        EvalArm::SingleManagedAgent => "Arm 2 · Managed Agent",
-        EvalArm::EpicenterTournament => "Arm 3 · Epicenter",
+        EvalArm::SingleModelCall => "Single Prompt",
+        EvalArm::SingleManagedAgent => "Single Agent",
+        EvalArm::EpicenterTournament => "Epicenter",
     }
 }
 
 fn split_badge(split: EvalSplit) -> (&'static str, &'static str) {
     match split {
-        EvalSplit::LockedUnseen => ("Locked Unseen", "epi-badge epi-badge-cyan"),
+        EvalSplit::LockedUnseen => ("Held-Out PR", "epi-badge epi-badge-cyan"),
         EvalSplit::Calibration => ("Calibration", "epi-badge epi-badge-amber"),
-        EvalSplit::LiveJudge => ("Live Judge", "epi-badge epi-badge-violet"),
+        EvalSplit::LiveJudge => ("Live PR", "epi-badge epi-badge-violet"),
+    }
+}
+
+fn strip_markdown_backticks(s: &str) -> String {
+    s.replace('`', "")
+}
+
+fn humanize_failure_category(raw: &str) -> String {
+    let cleaned = raw.trim().trim_matches('`');
+    match cleaned {
+        "incomplete_edge_case_fix" => "Missed an edge case".to_string(),
+        "regression_in_caller_dark_zone" => "Broke an untested caller".to_string(),
+        "multimodal_context_missed" => "Missed screenshot or media clues".to_string(),
+        "bandaid_symptom_masking" => "Surface-level workaround instead of root fix".to_string(),
+        "empty_patch" => "No code changes generated".to_string(),
+        "missed_target_files" => "Did not modify the relevant source files".to_string(),
+        "candidate_failed_verification" => "Failed test verification".to_string(),
+        "ground_truth_test_failed" => "Failed the PR's verification tests".to_string(),
+        "regression_suite_failed" => "Broke existing repository tests".to_string(),
+        "patch_apply_failed" => "Generated patch did not apply cleanly".to_string(),
+        "no_candidates" => "No valid approach produced".to_string(),
+        "test_tampering_violation" => "Attempted to alter locked test assertions".to_string(),
+        "arm1_execution_error" | "arm2_execution_error" | "arm3_execution_error" => {
+            "Execution error while running".to_string()
+        }
+        other => {
+            let spaced = other.replace('_', " ");
+            let mut chars = spaced.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => "Unknown issue".to_string(),
+            }
+        }
+    }
+}
+
+fn humanize_failure_summary_line(line: &str) -> String {
+    let mut s = strip_markdown_backticks(line)
+        .replace("Arm 1: Single Model Call", "Single Prompt")
+        .replace("Arm 2: Single Managed Agent", "Single Agent")
+        .replace("Arm 3: Epicenter Tournament", "Epicenter")
+        .replace("Single Model Call", "Single Prompt")
+        .replace("Single Managed Agent", "Single Agent")
+        .replace("Epicenter Tournament", "Epicenter");
+
+    for raw in [
+        "incomplete_edge_case_fix",
+        "regression_in_caller_dark_zone",
+        "multimodal_context_missed",
+        "bandaid_symptom_masking",
+        "empty_patch",
+        "missed_target_files",
+        "candidate_failed_verification",
+        "ground_truth_test_failed",
+        "regression_suite_failed",
+        "patch_apply_failed",
+        "no_candidates",
+        "test_tampering_violation",
+        "arm1_execution_error",
+        "arm2_execution_error",
+        "arm3_execution_error",
+    ] {
+        if s.contains(raw) {
+            s = s.replace(raw, &humanize_failure_category(raw));
+        }
+    }
+    s
+}
+
+fn format_duration_ms(ms: u64) -> String {
+    if ms >= 60_000 {
+        let mins = ms / 60_000;
+        let secs = (ms % 60_000) / 1000;
+        format!("{mins}m {secs}s")
+    } else if ms >= 1000 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else {
+        format!("{ms}ms")
     }
 }
 
@@ -381,7 +609,10 @@ fn repo_short_name(url: &str) -> String {
     }
 }
 
-fn filter_eval(eval: &FiveSigmaEval, filter: EvalFilter) -> (Vec<EvalIssueCase>, Vec<ArmOutcome>, EvalScorecard) {
+fn filter_eval(
+    eval: &FiveSigmaEval,
+    filter: EvalFilter,
+) -> (Vec<EvalIssueCase>, Vec<ArmOutcome>, EvalScorecard) {
     let cases: Vec<EvalIssueCase> = eval
         .cases
         .iter()
@@ -427,24 +658,24 @@ fn load_latest_eval(
             let resp = Request::get(&crate::api_client::api_url("/api/eval/latest"))
                 .send()
                 .await
-                .map_err(|e| format!("Network error fetching /api/eval/latest: {e}"))?;
+                .map_err(|e| format!("Network error fetching latest benchmark: {e}"))?;
             let status = resp.status();
             let text = resp
                 .text()
                 .await
-                .map_err(|e| format!("Failed reading /api/eval/latest body: {e}"))?;
+                .map_err(|e| format!("Failed reading benchmark response: {e}"))?;
             if status == 404 {
                 return Ok::<Option<FiveSigmaEval>, String>(None);
             }
             if !(200..300).contains(&status) {
-                return Err(format!("GET /api/eval/latest returned HTTP {status}: {text}"));
+                return Err(format!("Benchmark request returned HTTP {status}: {text}"));
             }
             let trimmed = text.trim();
             if trimmed.is_empty() || trimmed == "null" {
                 return Ok(None);
             }
             serde_json::from_str::<Option<FiveSigmaEval>>(trimmed)
-                .map_err(|e| format!("Invalid FiveSigmaEval JSON: {e}"))
+                .map_err(|e| format!("Invalid evaluation payload: {e}"))
         }
         .await;
 
@@ -463,13 +694,13 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
     let error_msg = RwSignal::new(Option::<String>::None);
     let active_filter = RwSignal::new(EvalFilter::All);
 
-    // Live Merged GitHub PR Judge signals
+    // Live Merged GitHub PR Evaluator signals
     let pr_url_input = RwSignal::new(String::new());
     let judging = RwSignal::new(false);
     let judge_error = RwSignal::new(Option::<String>::None);
     let live_judge_eval = RwSignal::new(Option::<FiveSigmaEval>::None);
 
-    // Load latest eval on mount
+    // Load latest live eval on mount
     load_latest_eval(eval_data, loading, error_msg);
 
     let on_refresh = move |_| {
@@ -496,17 +727,17 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                 let resp = req
                     .send()
                     .await
-                    .map_err(|e| format!("Network error calling /api/eval/judge-pr: {e}"))?;
+                    .map_err(|e| format!("Network error starting PR evaluation: {e}"))?;
                 let status = resp.status();
                 let text = resp
                     .text()
                     .await
-                    .map_err(|e| format!("Failed reading /api/eval/judge-pr response: {e}"))?;
+                    .map_err(|e| format!("Failed reading PR evaluation response: {e}"))?;
                 if !(200..300).contains(&status) {
-                    return Err(format!("Live PR Judge returned HTTP {status}: {text}"));
+                    return Err(format!("PR evaluation returned HTTP {status}: {text}"));
                 }
                 let parsed: LiveJudgePrResponse = serde_json::from_str(&text)
-                    .map_err(|e| format!("Invalid LiveJudgePrResponse JSON: {e}"))?;
+                    .map_err(|e| format!("Invalid PR evaluation JSON: {e}"))?;
                 Ok::<FiveSigmaEval, String>(parsed.eval)
             }
             .await;
@@ -522,16 +753,19 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
     view! {
         <style>{EVAL_STYLES}</style>
         <div class="epi-eval-wrap">
-            // 1. Live Merged GitHub PR Judge Deck
+            // 1. Evaluate Any Merged PR
             <section class="epi-judge-box">
-                <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px;">
+                <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:flex-start; gap:10px;">
                     <div>
-                        <h2 class="epi-eval-title" style="color:#38bdf8;">"Judge Any Merged GitHub PR Live"</h2>
+                        <h2 class="epi-eval-title" style="color:#7dd3fc;">"Evaluate Any Merged PR"</h2>
                         <div class="epi-eval-sub">
-                            "Paste any merged Python/TypeScript GitHub PR URL. Epicenter checks out base.sha, withholds maintainer test hunks as hidden ground truth, and runs a live 3-way blind test."
+                            "Paste any merged Python or TypeScript GitHub PR URL. Epicenter checks out the commit before the fix, withholds the PR's tests, and compares Single Prompt, Single Agent, and Epicenter head-to-head."
                         </div>
                     </div>
-                    <span class="epi-badge epi-badge-violet">"LIVE 3-WAY BLIND HARNESS"</span>
+                    <span class="epi-live-pill">
+                        <span class="model-dot dot-emerald"></span>
+                        "Live Evaluation"
+                    </span>
                 </div>
 
                 <form class="epi-judge-form" on:submit=on_run_live_judge>
@@ -548,9 +782,9 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                         disabled=move || judging.get() || pr_url_input.get().trim().is_empty()
                     >
                         {move || if judging.get() {
-                            "Running 3-Way Blind Test…"
+                            "Running Live Evaluation…"
                         } else {
-                            "Run Live 3-Way Blind Test"
+                            "Run Live Evaluation"
                         }}
                     </button>
                 </form>
@@ -561,15 +795,20 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
 
                 {move || live_judge_eval.get().map(|live_eval| {
                     let live_clone_for_promote = live_eval.clone();
+                    let pr_count = live_eval.cases.len();
                     view! {
-                        <div class="epi-eval-card" style="background:#080d18; border-color:rgba(16,185,129,0.45);">
+                        <div class="epi-eval-card" style="background:#080d18; border-color:rgba(16,185,129,0.4);">
                             <div class="epi-eval-head">
                                 <div>
-                                    <h3 class="epi-eval-title" style="font-size:14px; color:#10b981;">
-                                        {format!("Live Blind Verdict · {}", live_eval.label)}
+                                    <h3 class="epi-eval-title" style="font-size:14.5px; color:#6ee7b7;">
+                                        {format!("Live Evaluation Result · {}", live_eval.label)}
                                     </h3>
                                     <div class="epi-eval-sub">
-                                        {format!("Run {} · {} evaluated case(s)", live_eval.run_id, live_eval.cases.len())}
+                                        {if pr_count == 1 {
+                                            "1 PR evaluated live".to_string()
+                                        } else {
+                                            format!("{pr_count} PRs evaluated live")
+                                        }}
                                     </div>
                                 </div>
                                 <button
@@ -580,33 +819,33 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                                         active_filter.set(EvalFilter::All);
                                     }
                                 >
-                                    "Inspect in Full Dashboard"
+                                    "Inspect in Results Below"
                                 </button>
                             </div>
                             {render_metric_cards(&live_eval.scorecard)}
-                            {render_case_table(&live_eval.cases, &live_eval.outcomes)}
+                            {render_case_cards(&live_eval.cases, &live_eval.outcomes)}
                         </div>
                     }
                 })}
             </section>
 
-            // 2. Main 5-Sigma 3-Way Ladder Dashboard
+            // 2. Benchmark Results Dashboard
             <section class="epi-eval-card">
                 <div class="epi-eval-head">
                     <div>
-                        <h2 class="epi-eval-title">"5-Sigma 3-Way Evaluation Ladder"</h2>
+                        <h2 class="epi-eval-title">"Benchmark Results"</h2>
                         <div class="epi-eval-sub">
                             {move || match eval_data.get() {
-                                Some(ev) => format!(
-                                    "Run: {} · {} total cases ({} unseen · {} calibration · {} multimodal) · {}",
-                                    ev.label,
-                                    ev.scorecard.total_cases,
-                                    ev.scorecard.unseen_cases,
-                                    ev.scorecard.calibration_cases,
-                                    ev.scorecard.multimodal_cases,
-                                    ev.created_at.format("%Y-%m-%d %H:%M UTC")
-                                ),
-                                None => "Single Model Call vs. Single Managed Agent vs. Epicenter Tournament".to_string(),
+                                Some(ev) => {
+                                    let n = ev.scorecard.total_cases;
+                                    let unit = if n == 1 { "PR" } else { "PRs" };
+                                    format!(
+                                        "{} · {n} {unit} evaluated · {}",
+                                        ev.label,
+                                        ev.created_at.format("%Y-%m-%d %H:%M UTC")
+                                    )
+                                }
+                                None => "Compare Single Prompt, Single Agent, and Epicenter on real merged GitHub PRs.".to_string(),
                             }}
                         </div>
                     </div>
@@ -616,7 +855,7 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                         disabled=move || loading.get()
                         on:click=on_refresh
                     >
-                        {move || if loading.get() { "Refreshing…" } else { "Refresh Latest Eval" }}
+                        {move || if loading.get() { "Refreshing…" } else { "Refresh" }}
                     </button>
                 </div>
 
@@ -627,14 +866,14 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                 {move || {
                     if loading.get() && eval_data.get().is_none() {
                         return view! {
-                            <div class="epi-empty-state">"Loading latest 5-Sigma evaluation run from /api/eval/latest…"</div>
+                            <div class="epi-empty-state">"Loading latest benchmark results…"</div>
                         }.into_any();
                     }
 
                     let Some(ev) = eval_data.get() else {
                         return view! {
                             <div class="epi-empty-state">
-                                "No live host-verified 5-Sigma evaluation runs found yet. Epicenter only surfaces genuine live runs (fabricated dry-run seeds are omitted). Run `epicenter-eval run` against the live Gemini 4 API + Host Verifier, or paste any merged GitHub PR URL above to run a live 3-way blind test."
+                                "No live benchmark results yet. Paste any merged GitHub PR URL above to run a live head-to-head evaluation."
                             </div>
                         }.into_any();
                     };
@@ -654,14 +893,17 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                     let calib_cls = if filter == EvalFilter::Calibration { "epi-filter-pill active" } else { "epi-filter-pill" };
                     let media_cls = if filter == EvalFilter::MultimodalOnly { "epi-filter-pill active" } else { "epi-filter-pill" };
 
+                    let has_notes_or_failures =
+                        !ev.calibration_findings.is_empty() || !ev.remaining_failure_modes.is_empty();
+
                     view! {
-                        // Data Provenance Verification Banner / Live Host-Verified Pill
+                        // Data Provenance Strip
                         {if simulated {
                             view! {
                                 <div class="epi-sim-warning" role="alert">
                                     <span>"⚠"</span>
                                     <span>
-                                        "SIMULATED / DRY-RUN DATA — NOT REAL MODEL EVALUATION RESULTS. Run epicenter-eval run against live Gemini 4 API + Host Verifier for real scores."
+                                        "Simulated / dry-run data — not live benchmark results. Paste a real merged PR above to run a live evaluation."
                                     </span>
                                 </div>
                             }.into_any()
@@ -670,91 +912,107 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                                 <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
                                     <span class="epi-live-pill">
                                         <span class="model-dot dot-emerald"></span>
-                                        "LIVE HOST-VERIFIED 5-SIGMA RUN"
+                                        "Live Host-Verified Run"
                                     </span>
-                                    <span style="font-size:11.5px;color:#94a3b8;">
-                                        "Scored against withheld maintainer ground-truth tests on real pinned commits."
+                                    <span style="font-size:12px;color:#94a3b8;">
+                                        "Scored by running withheld PR tests against the repository's pre-fix commit."
                                     </span>
                                 </div>
                             }.into_any()
                         }}
 
-                        // Split Filter Pills
-                        <div class="epi-filter-bar">
-                            <button type="button" class=all_cls on:click=move |_| active_filter.set(EvalFilter::All)>
-                                {format!("All ({total_cnt})")}
-                            </button>
-                            <button type="button" class=unseen_cls on:click=move |_| active_filter.set(EvalFilter::LockedUnseen)>
-                                {format!("Locked Unseen ({unseen_cnt})")}
-                            </button>
-                            <button type="button" class=calib_cls on:click=move |_| active_filter.set(EvalFilter::Calibration)>
-                                {format!("Calibration ({calib_cnt})")}
-                            </button>
-                            <button type="button" class=media_cls on:click=move |_| active_filter.set(EvalFilter::MultimodalOnly)>
-                                {format!("Multimodal Media Only ({media_cnt})")}
-                            </button>
+                        // Split Filter Pills (only shown when multiple cases exist)
+                        {(total_cnt > 1).then(|| view! {
+                            <div class="epi-filter-bar">
+                                <button type="button" class=all_cls on:click=move |_| active_filter.set(EvalFilter::All)>
+                                    {format!("All ({total_cnt})")}
+                                </button>
+                                {(unseen_cnt > 0).then(|| view! {
+                                    <button type="button" class=unseen_cls on:click=move |_| active_filter.set(EvalFilter::LockedUnseen)>
+                                        {format!("Held-Out PRs ({unseen_cnt})")}
+                                    </button>
+                                })}
+                                {(calib_cnt > 0).then(|| view! {
+                                    <button type="button" class=calib_cls on:click=move |_| active_filter.set(EvalFilter::Calibration)>
+                                        {format!("Calibration ({calib_cnt})")}
+                                    </button>
+                                })}
+                                {(media_cnt > 0).then(|| view! {
+                                    <button type="button" class=media_cls on:click=move |_| active_filter.set(EvalFilter::MultimodalOnly)>
+                                        {format!("With Media ({media_cnt})")}
+                                    </button>
+                                })}
+                            </div>
+                        })}
+
+                        // Plain-English Approach Legend
+                        <div class="epi-legend-strip">
+                            <span class="epi-legend-entry">
+                                <span class="epi-arm-dot" style="background:#94a3b8;"></span>
+                                <strong>"Single Prompt"</strong>
+                                <span class="epi-legend-desc">"One-shot model call"</span>
+                            </span>
+                            <span class="epi-legend-entry">
+                                <span class="epi-arm-dot" style="background:#f59e0b;"></span>
+                                <strong>"Single Agent"</strong>
+                                <span class="epi-legend-desc">"Single coding agent"</span>
+                            </span>
+                            <span class="epi-legend-entry">
+                                <span class="epi-arm-dot" style="background:#10b981;"></span>
+                                <strong style="color:#6ee7b7;">"Epicenter"</strong>
+                                <span class="epi-legend-desc">"Multi-approach comparison"</span>
+                            </span>
                         </div>
 
-                        // Metric Cards
+                        // Human-Readable Metric Comparison Cards (with directional horizontal bars)
                         {render_metric_cards(&scorecard)}
 
-                        // Grouped <svg> 3-Way Comparison Bar Chart
-                        {render_grouped_bars_svg(&scorecard)}
+                        // Optional Failure Summary & Calibration Notes (hidden when empty)
+                        {has_notes_or_failures.then(|| view! {
+                            <div class="epi-rubric-grid">
+                                {(!ev.remaining_failure_modes.is_empty()).then(|| view! {
+                                    <div style="display:flex; flex-direction:column; gap:10px;">
+                                        <h3 class="epi-eval-title" style="font-size:13.5px; color:#fcd34d;">
+                                            {format!("Failure Summary ({})", ev.remaining_failure_modes.len())}
+                                        </h3>
+                                        {ev.remaining_failure_modes
+                                            .iter()
+                                            .map(|mode| {
+                                                let clean = humanize_failure_summary_line(mode);
+                                                view! {
+                                                    <div class="epi-failure-pill">{clean}</div>
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </div>
+                                })}
 
-                        // 5-Sigma Rubric Proof: Calibration Findings + Remaining Failure Modes
-                        <div class="epi-rubric-grid">
-                            <div style="display:flex; flex-direction:column; gap:10px;">
-                                <h3 class="epi-eval-title" style="font-size:13px; color:#38bdf8;">
-                                    {format!("Calibration Iterations ({})", ev.calibration_findings.len())}
-                                </h3>
-                                {if ev.calibration_findings.is_empty() {
-                                    view! {
-                                        <div class="epi-empty-state" style="padding:18px;">
-                                            "No calibration findings recorded on this run."
-                                        </div>
-                                    }.into_any()
-                                } else {
-                                    ev.calibration_findings
-                                        .iter()
-                                        .cloned()
-                                        .map(render_calibration_finding)
-                                        .collect_view()
-                                        .into_any()
-                                }}
+                                {(!ev.calibration_findings.is_empty()).then(|| view! {
+                                    <div style="display:flex; flex-direction:column; gap:10px;">
+                                        <h3 class="epi-eval-title" style="font-size:13.5px; color:#7dd3fc;">
+                                            {format!("Calibration Notes ({})", ev.calibration_findings.len())}
+                                        </h3>
+                                        {ev.calibration_findings
+                                            .iter()
+                                            .cloned()
+                                            .map(render_calibration_finding)
+                                            .collect_view()}
+                                    </div>
+                                })}
                             </div>
+                        })}
 
-                            <div style="display:flex; flex-direction:column; gap:10px;">
-                                <h3 class="epi-eval-title" style="font-size:13px; color:#f59e0b;">
-                                    {format!("Remaining Failure Modes ({})", ev.remaining_failure_modes.len())}
-                                </h3>
-                                {if ev.remaining_failure_modes.is_empty() {
-                                    view! {
-                                        <div class="epi-empty-state" style="padding:18px;">
-                                            "No remaining failure modes logged."
-                                        </div>
-                                    }.into_any()
+                        // Per-PR Results Cards
+                        <div style="display:flex; flex-direction:column; gap:10px;">
+                            <h3 class="epi-eval-title" style="font-size:14px;">
+                                {let n = filtered_cases.len();
+                                if n == 1 {
+                                    "PR Result (1 case)".to_string()
                                 } else {
-                                    ev.remaining_failure_modes
-                                        .iter()
-                                        .cloned()
-                                        .map(|mode| view! {
-                                            <div class="epi-failure-pill">
-                                                <strong>"• "</strong>
-                                                {mode}
-                                            </div>
-                                        })
-                                        .collect_view()
-                                        .into_any()
+                                    format!("PR Results ({n} cases)")
                                 }}
-                            </div>
-                        </div>
-
-                        // Per-Case Outcome Table
-                        <div style="display:flex; flex-direction:column; gap:8px;">
-                            <h3 class="epi-eval-title" style="font-size:13px;">
-                                {format!("Per-Case Ground-Truth Outcomes ({} cases)", filtered_cases.len())}
                             </h3>
-                            {render_case_table(&filtered_cases, &filtered_outcomes)}
+                            {render_case_cards(&filtered_cases, &filtered_outcomes)}
                         </div>
                     }.into_any()
                 }}
@@ -763,290 +1021,180 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
     }
 }
 
-fn render_metric_cards(scorecard: &EvalScorecard) -> impl IntoView {
+fn render_bar_metric_card(
+    scorecard: &EvalScorecard,
+    title: &'static str,
+    hint: &'static str,
+    extract: fn(&ArmAggregateMetrics) -> Option<(f64, String)>,
+    color_by_risk: bool,
+) -> impl IntoView {
     let arms = EvalArm::all();
-    let render_card = |title: &'static str, fmt_val: fn(&ArmAggregateMetrics) -> String| {
-        let rows = arms
-            .iter()
-            .map(|&arm| {
-                let val_str = find_arm_metrics(scorecard, arm)
-                    .map(fmt_val)
-                    .unwrap_or_else(|| "—".to_string());
-                let color = arm_color(arm);
-                let val_weight = if arm == EvalArm::EpicenterTournament {
-                    "700"
-                } else {
-                    "500"
-                };
-                view! {
-                    <div class="epi-arm-row">
-                        <span style="color:#94a3b8;">
+    let rows = arms
+        .iter()
+        .map(|&arm| {
+            let color = arm_color(arm);
+            let val_pair = find_arm_metrics(scorecard, arm).and_then(extract);
+            let (pct_width, display_val, bar_color) = match val_pair {
+                Some((v, text)) => {
+                    let w = v.clamp(0.0, 100.0);
+                    let bc = if color_by_risk {
+                        if v <= 25.0 {
+                            "#10b981"
+                        } else if v <= 55.0 {
+                            "#f59e0b"
+                        } else {
+                            "#ef4444"
+                        }
+                    } else {
+                        color
+                    };
+                    (w, text, bc)
+                }
+                None => (0.0, "—".to_string(), "#334155"),
+            };
+
+            view! {
+                <div class="epi-bar-item">
+                    <div class="epi-bar-top">
+                        <span class="epi-bar-label">
                             <span class="epi-arm-dot" style=format!("background:{color};")></span>
                             {arm_short_label(arm)}
                         </span>
-                        <span style=format!("color:{color}; font-weight:{val_weight};")>{val_str}</span>
+                        <span class="epi-bar-val" style=format!("color:{bar_color};")>{display_val}</span>
                     </div>
-                }
-            })
-            .collect_view();
-
-        view! {
-            <div class="epi-metric-card">
-                <div class="epi-metric-name">{title}</div>
-                {rows}
-            </div>
-        }
-    };
+                    <div class="epi-bar-track">
+                        <div
+                            class="epi-bar-fill"
+                            style=format!("width:{pct_width:.1}%; background:{bar_color};")
+                        ></div>
+                    </div>
+                </div>
+            }
+        })
+        .collect_view();
 
     view! {
-        <div class="epi-metric-grid">
-            {render_card("Ground-Truth Pass %", |m| format!("{:.1}% ({}/{})", m.resolved_rate_pct, m.resolved_count, m.total_cases))}
-            {render_card("Regression-Free %", |m| format!("{:.1}%", m.regression_free_rate_pct))}
-            {render_card("Mean Impact Risk ↓", |m| m.mean_blast_risk_score.map(|v| format!("{v:.1}")).unwrap_or_else(|| "—".into()))}
-            {render_card("Mean Root-Cause Depth ↑", |m| m.mean_root_cause_depth.map(|v| format!("{v:.1}")).unwrap_or_else(|| "—".into()))}
-            {render_card("Median Speedup %", |m| m.median_speedup_pct.map(|v| format!("{v:+.1}%")).unwrap_or_else(|| "—".into()))}
+        <div class="epi-metric-card">
+            <div class="epi-metric-head">
+                <div class="epi-metric-name">{title}</div>
+                <div class="epi-metric-hint">{hint}</div>
+            </div>
+            <div class="epi-bar-list">{rows}</div>
         </div>
     }
 }
 
-fn render_grouped_bars_svg(scorecard: &EvalScorecard) -> impl IntoView {
-    let width = 760.0_f64;
-    let height = 270.0_f64;
-    let pad_l = 48.0_f64;
-    let pad_r = 22.0_f64;
-    let pad_t = 34.0_f64;
-    let pad_b = 46.0_f64;
-    let plot_w = width - pad_l - pad_r;
-    let plot_h = height - pad_t - pad_b;
-
+fn render_speedup_card(scorecard: &EvalScorecard) -> impl IntoView {
     let arms = EvalArm::all();
-
-    let groups: Vec<(&'static str, [Option<f64>; 3], bool)> = vec![
-        (
-            "Ground-Truth Pass %",
-            [
-                find_arm_metrics(scorecard, EvalArm::SingleModelCall).map(|m| m.resolved_rate_pct),
-                find_arm_metrics(scorecard, EvalArm::SingleManagedAgent).map(|m| m.resolved_rate_pct),
-                find_arm_metrics(scorecard, EvalArm::EpicenterTournament).map(|m| m.resolved_rate_pct),
-            ],
-            false,
-        ),
-        (
-            "Regression-Free %",
-            [
-                find_arm_metrics(scorecard, EvalArm::SingleModelCall).map(|m| m.regression_free_rate_pct),
-                find_arm_metrics(scorecard, EvalArm::SingleManagedAgent).map(|m| m.regression_free_rate_pct),
-                find_arm_metrics(scorecard, EvalArm::EpicenterTournament).map(|m| m.regression_free_rate_pct),
-            ],
-            false,
-        ),
-        (
-            "Mean Impact Risk ↓",
-            [
-                find_arm_metrics(scorecard, EvalArm::SingleModelCall)
-                    .and_then(|m| m.mean_blast_risk_score.map(|v| v as f64)),
-                find_arm_metrics(scorecard, EvalArm::SingleManagedAgent)
-                    .and_then(|m| m.mean_blast_risk_score.map(|v| v as f64)),
-                find_arm_metrics(scorecard, EvalArm::EpicenterTournament)
-                    .and_then(|m| m.mean_blast_risk_score.map(|v| v as f64)),
-            ],
-            false,
-        ),
-        (
-            "Root-Cause Depth ↑",
-            [
-                find_arm_metrics(scorecard, EvalArm::SingleModelCall)
-                    .and_then(|m| m.mean_root_cause_depth.map(|v| v as f64)),
-                find_arm_metrics(scorecard, EvalArm::SingleManagedAgent)
-                    .and_then(|m| m.mean_root_cause_depth.map(|v| v as f64)),
-                find_arm_metrics(scorecard, EvalArm::EpicenterTournament)
-                    .and_then(|m| m.mean_root_cause_depth.map(|v| v as f64)),
-            ],
-            false,
-        ),
-        (
-            "Median Speedup %",
-            [
-                find_arm_metrics(scorecard, EvalArm::SingleModelCall).and_then(|m| m.median_speedup_pct),
-                find_arm_metrics(scorecard, EvalArm::SingleManagedAgent).and_then(|m| m.median_speedup_pct),
-                find_arm_metrics(scorecard, EvalArm::EpicenterTournament).and_then(|m| m.median_speedup_pct),
-            ],
-            true,
-        ),
-    ];
-
-    let group_w = plot_w / (groups.len() as f64);
-    let bar_w = 24.0_f64;
-    let bar_gap = 6.0_f64;
-    let cluster_w = bar_w * 3.0 + bar_gap * 2.0;
-
-    let y_of = move |val: f64| {
-        let clamped = val.clamp(0.0, 100.0);
-        pad_t + ((100.0 - clamped) / 100.0) * plot_h
-    };
-    let base_y = pad_t + plot_h;
+    let rows = arms
+        .iter()
+        .map(|&arm| {
+            let dot_color = arm_color(arm);
+            let val = find_arm_metrics(scorecard, arm).and_then(|m| m.median_speedup_pct);
+            let (text, text_color) = match val {
+                Some(v) if v > 1.0 => (format!("{v:+.1}% faster"), "#6ee7b7"),
+                Some(v) if v < -1.0 => (format!("{:.1}% slower", v.abs()), "#fca5a5"),
+                Some(v) => (format!("{v:+.1}%"), "#cbd5e1"),
+                None => ("Not measured".to_string(), "#64748b"),
+            };
+            view! {
+                <div class="epi-bar-top" style="padding:4px 0; border-bottom:1px solid rgba(30,41,59,0.55);">
+                    <span class="epi-bar-label">
+                        <span class="epi-arm-dot" style=format!("background:{dot_color};")></span>
+                        {arm_short_label(arm)}
+                    </span>
+                    <span class="epi-bar-val" style=format!("color:{text_color};")>{text}</span>
+                </div>
+            }
+        })
+        .collect_view();
 
     view! {
-        <div class="epi-chart-frame">
-            <svg class="epi-chart-svg" viewBox="0 0 760 270">
-                // Top Legend
-                <g transform="translate(48, 15)">
-                    <rect x="0" y="-8" width="10" height="10" rx="2" fill="#94a3b8" />
-                    <text x="15" y="0" fill="#cbd5e1" font-size="10.5" font-weight="600">"Arm 1: Single Model Call"</text>
+        <div class="epi-metric-card">
+            <div class="epi-metric-head">
+                <div class="epi-metric-name">"Runtime Speedup"</div>
+                <div class="epi-metric-hint">"Faster is better (median vs. baseline)"</div>
+            </div>
+            <div class="epi-bar-list" style="gap:4px;">{rows}</div>
+        </div>
+    }
+}
 
-                    <rect x="175" y="-8" width="10" height="10" rx="2" fill="#f59e0b" />
-                    <text x="190" y="0" fill="#cbd5e1" font-size="10.5" font-weight="600">"Arm 2: Single Managed Agent"</text>
-
-                    <rect x="380" y="-8" width="10" height="10" rx="2" fill="#10b981" />
-                    <text x="395" y="0" fill="#10b981" font-size="10.5" font-weight="700">"Arm 3: Epicenter Tournament"</text>
-                </g>
-
-                // Horizontal gridlines 0..100
-                {[100.0_f64, 75.0, 50.0, 25.0, 0.0].into_iter().map(|tick| {
-                    let y = y_of(tick);
-                    view! {
-                        <g>
-                            <line
-                                x1=format!("{pad_l:.1}")
-                                y1=format!("{y:.1}")
-                                x2=format!("{:.1}", width - pad_r)
-                                y2=format!("{y:.1}")
-                                stroke="#1e293b"
-                                stroke-width="1"
-                                stroke-dasharray="3 4"
-                            />
-                            <text
-                                x=format!("{:.1}", pad_l - 8.0)
-                                y=format!("{:.1}", y + 3.5)
-                                text-anchor="end"
-                                fill="#64748b"
-                                font-size="9.5"
-                                font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-                            >
-                                {format!("{tick:.0}")}
-                            </text>
-                        </g>
-                    }
-                }).collect_view()}
-
-                // X baseline
-                <line
-                    x1=format!("{pad_l:.1}")
-                    y1=format!("{base_y:.1}")
-                    x2=format!("{:.1}", width - pad_r)
-                    y2=format!("{base_y:.1}")
-                    stroke="#334155"
-                    stroke-width="1.3"
-                />
-
-                // Grouped bars
-                {groups.into_iter().enumerate().map(|(g_idx, (label, vals, is_signed))| {
-                    let gx_center = pad_l + (g_idx as f64 + 0.5) * group_w;
-                    let start_x = gx_center - cluster_w * 0.5;
-
-                    view! {
-                        <g>
-                            {vals.into_iter().enumerate().map(|(a_idx, opt_v)| {
-                                let bx = start_x + (a_idx as f64) * (bar_w + bar_gap);
-                                let color = arm_color(arms[a_idx]);
-                                match opt_v {
-                                    Some(v) => {
-                                        let plotted = v.clamp(0.0, 100.0);
-                                        let top_y = y_of(plotted);
-                                        let h = (base_y - top_y).max(2.0);
-                                        let txt = if is_signed {
-                                            format!("{v:+.0}%")
-                                        } else {
-                                            format!("{v:.0}")
-                                        };
-                                        view! {
-                                            <g>
-                                                <rect
-                                                    x=format!("{bx:.1}")
-                                                    y=format!("{top_y:.1}")
-                                                    width=format!("{bar_w:.1}")
-                                                    height=format!("{h:.1}")
-                                                    rx="4"
-                                                    fill=color
-                                                    opacity="0.92"
-                                                />
-                                                <text
-                                                    x=format!("{:.1}", bx + bar_w * 0.5)
-                                                    y=format!("{:.1}", top_y - 5.0)
-                                                    text-anchor="middle"
-                                                    fill=color
-                                                    font-size="9"
-                                                    font-weight="700"
-                                                    font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-                                                >
-                                                    {txt}
-                                                </text>
-                                            </g>
-                                        }.into_any()
-                                    }
-                                    None => view! {
-                                        <g>
-                                            <rect
-                                                x=format!("{bx:.1}")
-                                                y=format!("{:.1}", base_y - 2.0)
-                                                width=format!("{bar_w:.1}")
-                                                height="2"
-                                                fill="#334155"
-                                            />
-                                            <text
-                                                x=format!("{:.1}", bx + bar_w * 0.5)
-                                                y=format!("{:.1}", base_y - 6.0)
-                                                text-anchor="middle"
-                                                fill="#475569"
-                                                font-size="9"
-                                            >
-                                                "—"
-                                            </text>
-                                        </g>
-                                    }.into_any(),
-                                }
-                            }).collect_view()}
-
-                            <text
-                                x=format!("{gx_center:.1}")
-                                y=format!("{:.1}", base_y + 20.0)
-                                text-anchor="middle"
-                                fill="#cbd5e1"
-                                font-size="10.5"
-                                font-weight="600"
-                            >
-                                {label}
-                            </text>
-                        </g>
-                    }
-                }).collect_view()}
-            </svg>
+fn render_metric_cards(scorecard: &EvalScorecard) -> impl IntoView {
+    view! {
+        <div class="epi-metric-grid">
+            {render_bar_metric_card(
+                scorecard,
+                "Tests Passed",
+                "Higher is better (PR verification tests)",
+                |m| Some((m.resolved_rate_pct, format!("{:.0}% ({}/{})", m.resolved_rate_pct, m.resolved_count, m.total_cases))),
+                false,
+            )}
+            {render_bar_metric_card(
+                scorecard,
+                "No Regressions",
+                "Higher is better (existing test suite)",
+                |m| Some((m.regression_free_rate_pct, format!("{:.0}%", m.regression_free_rate_pct))),
+                false,
+            )}
+            {render_bar_metric_card(
+                scorecard,
+                "Impact Risk",
+                "Lower is safer (0–100 scale)",
+                |m| m.mean_blast_risk_score.map(|v| (v as f64, format!("{v:.0} / 100"))),
+                true,
+            )}
+            {render_bar_metric_card(
+                scorecard,
+                "Root-Cause Quality",
+                "Higher is deeper (0–100 scale)",
+                |m| m.mean_root_cause_depth.map(|v| (v as f64, format!("{v:.0} / 100"))),
+                false,
+            )}
+            {render_speedup_card(scorecard)}
         </div>
     }
 }
 
 fn render_calibration_finding(finding: CalibrationFinding) -> impl IntoView {
+    let failure_mode = strip_markdown_backticks(&finding.failure_mode);
+    let system_change = strip_markdown_backticks(&finding.system_change_made);
+    let impact = strip_markdown_backticks(&finding.impact_summary);
+
     view! {
         <div class="epi-finding-card">
             <div style="display:flex; flex-wrap:wrap; justify-content:space-between; gap:6px; align-items:center;">
-                <span style="font-weight:700; color:#f8fafc;">{finding.failure_mode}</span>
+                <span style="font-weight:700; color:#f8fafc;">{failure_mode}</span>
                 <span class="epi-badge epi-badge-amber">{finding.observed_on_case}</span>
             </div>
             <div class="epi-finding-step">
-                <strong style="color:#38bdf8;">"Engineering Change: "</strong>
-                {finding.system_change_made}
+                <strong style="color:#7dd3fc;">"Change: "</strong>
+                {system_change}
             </div>
             <div class="epi-finding-step">
-                <strong style="color:#10b981;">"Impact: "</strong>
-                {finding.impact_summary}
+                <strong style="color:#6ee7b7;">"Result: "</strong>
+                {impact}
             </div>
         </div>
     }
 }
 
-fn render_arm_cell(outcome: Option<&ArmOutcome>) -> impl IntoView {
+fn render_arm_outcome_box(arm: EvalArm, outcome: Option<&ArmOutcome>) -> impl IntoView {
+    let dot_color = arm_color(arm);
+    let arm_name = arm_short_label(arm);
     let Some(o) = outcome else {
-        return view! { <span style="color:#475569;">"—"</span> }.into_any();
+        return view! {
+            <div class="epi-arm-box">
+                <div class="epi-arm-box-head">
+                    <span class="epi-arm-box-name">
+                        <span class="epi-arm-dot" style=format!("background:{dot_color};")></span>
+                        {arm_name}
+                    </span>
+                    <span class="epi-badge">"Not Run"</span>
+                </div>
+            </div>
+        }
+        .into_any();
     };
 
     let pass_cls = if o.resolved_ground_truth {
@@ -1054,61 +1202,122 @@ fn render_arm_cell(outcome: Option<&ArmOutcome>) -> impl IntoView {
     } else {
         "epi-badge epi-badge-fail"
     };
-    let pass_text = if o.resolved_ground_truth { "PASS" } else { "FAIL" };
-    let reg_text = if o.regression_free { "Reg-Free" } else { "Regressed" };
+    let pass_text = if o.resolved_ground_truth {
+        "Passed"
+    } else {
+        "Failed"
+    };
     let reg_cls = if o.regression_free {
         "epi-badge epi-badge-cyan"
     } else {
         "epi-badge epi-badge-fail"
     };
+    let reg_text = if o.regression_free {
+        "No Regressions"
+    } else {
+        "Regressed"
+    };
 
-    let stats = format!(
-        "Risk {} · Depth {} · Sp {}",
-        o.blast_risk_score
-            .map(|v| format!("{v:.0}"))
-            .unwrap_or_else(|| "—".into()),
-        o.root_cause_depth_score
-            .map(|v| format!("{v:.0}"))
-            .unwrap_or_else(|| "—".into()),
-        o.speedup_pct
-            .map(|v| format!("{v:+.1}%"))
-            .unwrap_or_else(|| "—".into()),
-    );
+    let box_cls = if arm == EvalArm::EpicenterTournament && o.resolved_ground_truth {
+        "epi-arm-box winner"
+    } else {
+        "epi-arm-box"
+    };
 
-    let fail_cat = o.failure_category.clone();
-    let notes = o.notes.clone();
+    let risk_str = o
+        .blast_risk_score
+        .map(|v| format!("{v:.0}/100"))
+        .unwrap_or_else(|| "—".into());
+    let depth_str = o
+        .root_cause_depth_score
+        .map(|v| format!("{v:.0}/100"))
+        .unwrap_or_else(|| "—".into());
+    let speed_str = o
+        .speedup_pct
+        .map(|v| format!("{v:+.1}%"))
+        .unwrap_or_else(|| "—".into());
+
+    let duration_opt = (o.duration_ms > 0).then(|| format_duration_ms(o.duration_ms));
+    let fail_reason = o
+        .failure_category
+        .as_deref()
+        .map(humanize_failure_category);
+    let notes = o
+        .notes
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(strip_markdown_backticks);
 
     view! {
-        <div style="display:flex; flex-direction:column; gap:4px; min-width:160px;">
-            <div style="display:flex; flex-wrap:wrap; gap:4px;">
+        <div class=box_cls>
+            <div class="epi-arm-box-head">
+                <span class="epi-arm-box-name">
+                    <span class="epi-arm-dot" style=format!("background:{dot_color};")></span>
+                    {arm_name}
+                </span>
                 <span class=pass_cls>{pass_text}</span>
+            </div>
+
+            <div class="epi-arm-subrow">
                 <span class=reg_cls>{reg_text}</span>
+                {duration_opt.map(|d| view! {
+                    <span class="mono" style="font-size:11px; color:#64748b;">{format!("Runtime: {d}")}</span>
+                })}
             </div>
-            <div style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:10.5px; color:#94a3b8;">
-                {stats}
+
+            <div class="epi-arm-stats-grid">
+                <div class="epi-arm-stat">
+                    <span class="epi-arm-stat-label">"Risk"</span>
+                    <span class="epi-arm-stat-val">{risk_str}</span>
+                </div>
+                <div class="epi-arm-stat">
+                    <span class="epi-arm-stat-label">"Root-Cause"</span>
+                    <span class="epi-arm-stat-val">{depth_str}</span>
+                </div>
+                <div class="epi-arm-stat">
+                    <span class="epi-arm-stat-label">"Speedup"</span>
+                    <span class="epi-arm-stat-val">{speed_str}</span>
+                </div>
             </div>
-            {fail_cat.map(|fc| view! {
-                <div style="font-size:10.5px; color:#fca5a5;">{format!("Cause: {fc}")}</div>
+
+            {fail_reason.map(|reason| view! {
+                <div class="epi-cause-box">
+                    <strong>"Reason: "</strong>
+                    {reason}
+                </div>
             })}
-            {notes.map(|n| view! {
-                <div style="font-size:10.5px; color:#64748b;">{n}</div>
+
+            {notes.map(|n| {
+                if n.len() > 110 {
+                    view! {
+                        <details class="epi-note-details">
+                            <summary>"View evaluation notes"</summary>
+                            <p>{n}</p>
+                        </details>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="epi-note-text">{n}</div>
+                    }.into_any()
+                }
             })}
         </div>
     }
     .into_any()
 }
 
-fn render_case_table(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl IntoView {
+fn render_case_cards(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl IntoView {
     if cases.is_empty() {
         return view! {
-            <div class="epi-empty-state" style="padding:20px;">
-                "No cases match the active filter split."
+            <div class="epi-empty-state" style="padding:22px;">
+                "No PR cases match the active filter."
             </div>
         }
         .into_any();
     }
 
-    let rows = cases
+    let cards = cases
         .iter()
         .map(|case| {
             let (sp_lbl, sp_cls) = split_badge(case.split);
@@ -1118,7 +1327,7 @@ fn render_case_table(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl I
             let pr_link = case.pr_number.map(|pr| {
                 let href = format!("{repo_base}/pull/{pr}");
                 let label = format!("{repo_short} PR #{pr}");
-                (href, label, pr)
+                (href, label)
             });
             let show_separate_issue = match case.pr_number {
                 Some(pr) => case.issue_number != 0 && case.issue_number != pr,
@@ -1159,76 +1368,69 @@ fn render_case_table(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl I
             };
 
             view! {
-                <tr>
-                    <td style="min-width:230px;">
-                        <div style="font-weight:700; color:#f8fafc;">{title}</div>
-                        <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:5px;">
-                            {pr_link.map(|(href, label, _pr)| view! {
-                                <a
-                                    href=href
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style="color:#38bdf8; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; text-decoration:none; font-weight:600;"
-                                >
-                                    {label}
-                                </a>
-                            })}
-                            {issue_link.map(|(href, label)| view! {
-                                <a
-                                    href=href
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style="color:#7dd3fc; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; text-decoration:none;"
-                                >
-                                    {label}
-                                </a>
-                            })}
-                            {commit_badge.map(|(href, short_sha, full_sha)| view! {
-                                <a
-                                    href=href
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    class="epi-sha-badge"
-                                    title=format!("Pinned parent commit {full_sha}")
-                                >
-                                    {format!("@{short_sha}")}
-                                </a>
-                            })}
-                            <span class=sp_cls>{sp_lbl}</span>
-                            {case.has_multimodal_media.then(|| view! {
-                                <span class="epi-badge epi-badge-violet">"Multimodal"</span>
-                            })}
+                <article class="epi-case-card">
+                    <div class="epi-case-head">
+                        <div>
+                            <div class="epi-case-title">{title}</div>
+                            <div class="epi-case-meta">
+                                {pr_link.map(|(href, label)| view! {
+                                    <a
+                                        href=href
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style="color:#38bdf8; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; text-decoration:none; font-weight:600;"
+                                    >
+                                        {label}
+                                    </a>
+                                })}
+                                {issue_link.map(|(href, label)| view! {
+                                    <a
+                                        href=href
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style="color:#7dd3fc; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; text-decoration:none;"
+                                    >
+                                        {label}
+                                    </a>
+                                })}
+                                {commit_badge.map(|(href, short_sha, full_sha)| view! {
+                                    <a
+                                        href=href
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        class="epi-sha-badge"
+                                        title=format!("Pre-fix commit {full_sha}")
+                                    >
+                                        {format!("@{short_sha}")}
+                                    </a>
+                                })}
+                                <span class=sp_cls>{sp_lbl}</span>
+                                {case.has_multimodal_media.then(|| view! {
+                                    <span class="epi-badge epi-badge-violet">"Has Media"</span>
+                                })}
+                            </div>
                         </div>
-                    </td>
-                    <td>{render_arm_cell(o1)}</td>
-                    <td>{render_arm_cell(o2)}</td>
-                    <td>{render_arm_cell(o3)}</td>
-                </tr>
+                    </div>
+
+                    <div class="epi-arm-compare-grid">
+                        {render_arm_outcome_box(EvalArm::SingleModelCall, o1)}
+                        {render_arm_outcome_box(EvalArm::SingleManagedAgent, o2)}
+                        {render_arm_outcome_box(EvalArm::EpicenterTournament, o3)}
+                    </div>
+                </article>
             }
         })
         .collect_view();
 
     view! {
-        <div class="epi-table-scroll">
-            <table class="epi-table">
-                <thead>
-                    <tr>
-                        <th>"Issue / Benchmark Case"</th>
-                        <th>"Arm 1 · Single Model"</th>
-                        <th>"Arm 2 · Managed Agent"</th>
-                        <th>"Arm 3 · Epicenter"</th>
-                    </tr>
-                </thead>
-                <tbody>{rows}</tbody>
-            </table>
-        </div>
+        <div class="epi-case-list">{cards}</div>
     }
     .into_any()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_simulated_label;
+    use super::{humanize_failure_category, humanize_failure_summary_line, is_simulated_label};
 
     #[test]
     fn detects_simulated_labels_case_insensitively() {
@@ -1238,5 +1440,21 @@ mod tests {
         assert!(is_simulated_label("Simulated Run"));
         assert!(!is_simulated_label("live-gemini4-host-verified-v1"));
         assert!(!is_simulated_label("pallets/click#3884 live judge"));
+    }
+
+    #[test]
+    fn humanizes_failure_codes_and_summaries() {
+        assert_eq!(
+            humanize_failure_category("regression_in_caller_dark_zone"),
+            "Broke an untested caller"
+        );
+        assert_eq!(
+            humanize_failure_category("custom_timeout_error"),
+            "Custom timeout error"
+        );
+        let summary = humanize_failure_summary_line(
+            "Arm 3: Epicenter Tournament — `incomplete_edge_case_fix` (2 cases)",
+        );
+        assert_eq!(summary, "Epicenter — Missed an edge case (2 cases)");
     }
 }

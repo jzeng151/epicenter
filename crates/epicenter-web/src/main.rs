@@ -11,7 +11,7 @@ use crate::briefing::BriefingAndHandoffDeck;
 use crate::capture::MultimodalIntakeDeck;
 use crate::eval_view::FiveSigmaEvalView;
 use crate::media_panel::MultimodalEvidencePanel;
-use crate::pareto_svg::ParetoAndArenaPanel;
+use crate::pareto_svg::{CandidateApproachesStrip, ParetoAndArenaPanel};
 use crate::ripple_svg::BlastRadiusRippleMap;
 use epicenter_common::{
     LiveEvent, LogLevel, ServerStatusResponse, SessionListItem, TaskKind, TournamentSession,
@@ -23,18 +23,18 @@ use wasm_bindgen_futures::spawn_local;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StudioTab {
-    MissionControl,
-    FiveSigmaEval,
+    Studio,
+    PrBenchmark,
 }
 
 const PIPELINE_STAGES: [(TournamentStage, &str); 7] = [
     (TournamentStage::Intake, "1. Intake"),
-    (TournamentStage::RedGate, "2. Red-Gate"),
-    (TournamentStage::Planning, "3. Plan K"),
-    (TournamentStage::Executing, "4. Sandboxes"),
-    (TournamentStage::Benchmarking, "5. Arena"),
-    (TournamentStage::Auditing, "6. Blast Audit"),
-    (TournamentStage::Completed, "7. Briefing"),
+    (TournamentStage::RedGate, "2. Repro Test"),
+    (TournamentStage::Planning, "3. Approaches"),
+    (TournamentStage::Executing, "4. Implement"),
+    (TournamentStage::Benchmarking, "5. Benchmark"),
+    (TournamentStage::Auditing, "6. Risk Audit"),
+    (TournamentStage::Completed, "7. Summary"),
 ];
 
 fn stage_rank(stage: TournamentStage) -> usize {
@@ -53,13 +53,13 @@ fn stage_rank(stage: TournamentStage) -> usize {
 fn stage_label(stage: TournamentStage) -> &'static str {
     match stage {
         TournamentStage::Intake => "Intake",
-        TournamentStage::RedGate => "Red-Gate",
-        TournamentStage::Planning => "Planning",
-        TournamentStage::Executing => "Executing",
-        TournamentStage::Benchmarking => "Benchmarking",
-        TournamentStage::Auditing => "Auditing",
+        TournamentStage::RedGate => "Repro Test",
+        TournamentStage::Planning => "Approaches",
+        TournamentStage::Executing => "Implement",
+        TournamentStage::Benchmarking => "Benchmark",
+        TournamentStage::Auditing => "Risk Audit",
         TournamentStage::Completed => "Completed",
-        TournamentStage::Failed => "Failed",
+        TournamentStage::Failed => "Stopped",
     }
 }
 
@@ -88,7 +88,7 @@ fn main() {
 
 #[component]
 pub fn App() -> impl IntoView {
-    let active_tab = RwSignal::new(StudioTab::MissionControl);
+    let active_tab = RwSignal::new(StudioTab::Studio);
 
     let server_status = RwSignal::new(Option::<ServerStatusResponse>::None);
     let server_err = RwSignal::new(Option::<String>::None);
@@ -114,7 +114,7 @@ pub fn App() -> impl IntoView {
             .map(|s| !s.intake.attachments.is_empty() || !s.intake.multimodal_findings.is_empty())
             .unwrap_or(false)
     });
-    let sse_status = RwSignal::new("IDLE".to_string());
+    let sse_status = RwSignal::new("Idle".to_string());
     let loading_session = RwSignal::new(false);
     let session_error = RwSignal::new(Option::<String>::None);
 
@@ -155,7 +155,7 @@ pub fn App() -> impl IntoView {
         sse_handle.update_value(|slot| {
             let _ = slot.take();
         });
-        sse_status.set("LIVE SSE".to_string());
+        sse_status.set("Live".to_string());
 
         let sub = api_client::subscribe_session_events(
             session_id,
@@ -191,7 +191,7 @@ pub fn App() -> impl IntoView {
                     if let Some(rec) = recommended_strategy_id {
                         selected_strategy_id.set(Some(rec.clone()));
                     }
-                    sse_status.set("SYNCED".to_string());
+                    sse_status.set("Complete".to_string());
                 }
 
                 if needs_refresh || is_terminal {
@@ -210,17 +210,17 @@ pub fn App() -> impl IntoView {
                     })
                     .unwrap_or(false);
                 if stage_done {
-                    sse_status.set("SYNCED".to_string());
+                    sse_status.set("Complete".to_string());
                     sse_handle.update_value(|slot| {
                         let _ = slot.take();
                     });
                 } else {
-                    sse_status.set("RECONNECTING".to_string());
+                    sse_status.set("Reconnecting".to_string());
                     telemetry_logs.update(|logs| {
                         logs.push(TelemetryLogEntry {
                             timestamp: chrono::Utc::now(),
                             level: LogLevel::Warn,
-                            source: "sse".to_string(),
+                            source: "stream".to_string(),
                             message: err_msg,
                         });
                     });
@@ -231,7 +231,7 @@ pub fn App() -> impl IntoView {
         match sub {
             Ok(handle) => sse_handle.set_value(Some(handle)),
             Err(err) => {
-                sse_status.set("OFFLINE".to_string());
+                sse_status.set("Disconnected".to_string());
                 session_error.set(Some(err));
             }
         }
@@ -263,7 +263,7 @@ pub fn App() -> impl IntoView {
                         sse_handle.update_value(|slot| {
                             let _ = slot.take();
                         });
-                        sse_status.set("SYNCED".to_string());
+                        sse_status.set("Complete".to_string());
                     } else {
                         connect_sse(session_id);
                     }
@@ -282,7 +282,7 @@ pub fn App() -> impl IntoView {
             timestamp: chrono::Utc::now(),
             level: LogLevel::Info,
             source: "studio".to_string(),
-            message: format!("Session {session_id} created — subscribing to live SSE stream."),
+            message: "Comparison started — streaming live agent trace.".to_string(),
         }]);
         selected_strategy_id.set(None);
         active_session.set(Some(sess));
@@ -326,31 +326,8 @@ pub fn App() -> impl IntoView {
                         </div>
                         <div class="brand-title-group">
                             <span class="brand-wordmark">"EPICENTER"</span>
-                            <span class="brand-sub">"Gemini 4 Tournament & Blast-Radius Console"</span>
+                            <span class="brand-sub">"Implementation Testing Studio"</span>
                         </div>
-                    </div>
-
-                    <div class="model-lineup" aria-label="Active Gemini 4 Model Lineup">
-                        <span class="model-pill">
-                            <span class="model-dot dot-cyan"></span>
-                            <strong>"Hydrogen"</strong>
-                            "Intake"
-                        </span>
-                        <span class="model-pill">
-                            <span class="model-dot dot-violet"></span>
-                            <strong>"Carbon"</strong>
-                            "Architect/Auditor"
-                        </span>
-                        <span class="model-pill">
-                            <span class="model-dot dot-emerald"></span>
-                            <strong>"Neon"</strong>
-                            "Sandboxes"
-                        </span>
-                        <span class="model-pill">
-                            <span class="model-dot dot-amber"></span>
-                            <strong>"Flash TTS"</strong>
-                            "Briefing"
-                        </span>
                     </div>
 
                     <div class="header-right">
@@ -366,7 +343,7 @@ pub fn App() -> impl IntoView {
                                             {if st.has_gemini_key { "Gemini Live" } else { "No Gemini Key" }}
                                         </span>
                                         <span class=if st.has_github_token { "status-chip ok" } else { "status-chip" }>
-                                            {if st.has_github_token { "GitHub PR Ready" } else { "Export Only" }}
+                                            {if st.has_github_token { "GitHub Connected" } else { "Local Export Only" }}
                                         </span>
                                     </>
                                 }.into_any(),
@@ -381,17 +358,17 @@ pub fn App() -> impl IntoView {
                         <nav class="tab-toggle" aria-label="Studio Mode">
                             <button
                                 type="button"
-                                class=move || if active_tab.get() == StudioTab::MissionControl { "tab-btn active" } else { "tab-btn" }
-                                on:click=move |_| active_tab.set(StudioTab::MissionControl)
+                                class=move || if active_tab.get() == StudioTab::Studio { "tab-btn active" } else { "tab-btn" }
+                                on:click=move |_| active_tab.set(StudioTab::Studio)
                             >
-                                "Mission Control"
+                                "Studio"
                             </button>
                             <button
                                 type="button"
-                                class=move || if active_tab.get() == StudioTab::FiveSigmaEval { "tab-btn active" } else { "tab-btn" }
-                                on:click=move |_| active_tab.set(StudioTab::FiveSigmaEval)
+                                class=move || if active_tab.get() == StudioTab::PrBenchmark { "tab-btn active" } else { "tab-btn" }
+                                on:click=move |_| active_tab.set(StudioTab::PrBenchmark)
                             >
-                                "5 Sigma Benchmark & Live Judge"
+                                "PR Benchmark"
                             </button>
                         </nav>
                     </div>
@@ -401,12 +378,12 @@ pub fn App() -> impl IntoView {
             // Main Studio Surface
             <main class="studio-main">
                 {move || match active_tab.get() {
-                    StudioTab::FiveSigmaEval => view! {
+                    StudioTab::PrBenchmark => view! {
                         <FiveSigmaEvalView />
                     }.into_any(),
-                    StudioTab::MissionControl => view! {
+                    StudioTab::Studio => view! {
                         <>
-                            // Recent Sessions Selector & New Tournament Toggle Bar
+                            // Recent Sessions Selector & New Comparison Toggle Bar
                             <section class="panel session-bar">
                                 <div class="session-bar-left">
                                     <span class="field-label" style="margin:0;white-space:nowrap;">"Recent Sessions"</span>
@@ -425,15 +402,20 @@ pub fn App() -> impl IntoView {
                                             }
                                         }
                                     >
-                                        <option value="">"— Select a persisted tournament session —"</option>
+                                        <option value="">"— Select a saved comparison session —"</option>
                                         {move || {
                                             sessions_list
                                                 .get()
                                                 .into_iter()
                                                 .map(|item| {
                                                     let id_str = item.id.to_string();
+                                                    let cand_word = if item.candidate_count == 1 {
+                                                        "candidate"
+                                                    } else {
+                                                        "candidates"
+                                                    };
                                                     let label = format!(
-                                                        "[{}] {} · {} cand · {}",
+                                                        "[{}] {} · {} {cand_word} · {}",
                                                         stage_label(item.stage),
                                                         item.title,
                                                         item.candidate_count,
@@ -454,17 +436,12 @@ pub fn App() -> impl IntoView {
                                 </div>
 
                                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                                    {move || active_session.get().map(|sess| view! {
-                                        <span class="badge badge-cyan">
-                                            {format!("ID {}", &sess.id.to_string()[..8])}
-                                        </span>
-                                    })}
                                     <button
                                         type="button"
                                         class=move || if show_intake.get() { "btn btn-sm" } else { "btn btn-primary btn-sm" }
                                         on:click=move |_| show_intake.update(|v| *v = !*v)
                                     >
-                                        {move || if show_intake.get() { "Hide Intake Deck" } else { "+ New Tournament" }}
+                                        {move || if show_intake.get() { "Hide Intake" } else { "+ New Comparison" }}
                                     </button>
                                 </div>
                             </section>
@@ -473,14 +450,14 @@ pub fn App() -> impl IntoView {
                                 <div class="alert-banner err">{err}</div>
                             })}
 
-                            // Collapsible Multimodal Intake Deck
+                            // Collapsible Multimodal Intake
                             {move || show_intake.get().then(|| view! {
                                 <MultimodalIntakeDeck
                                     on_session_created=Callback::new(on_session_created)
                                 />
                             })}
 
-                            // Live 7-Stage Progress Seismograph Bar + Telemetry Drawer
+                            // Live 7-Stage Progress Bar + Agent Trace Drawer
                             {move || active_session.get().map(|sess| {
                                 let current_stage = sess.stage;
                                 let current_rank = stage_rank(current_stage);
@@ -493,6 +470,11 @@ pub fn App() -> impl IntoView {
                                 let repo_display = sess.intake.repo_url.clone();
                                 let title_display = sess.intake.title.clone();
                                 let cand_count = sess.candidates.len();
+                                let cand_label = if cand_count == 1 {
+                                    "1 candidate".to_string()
+                                } else {
+                                    format!("{cand_count} candidates")
+                                };
 
                                 view! {
                                     <section class="panel">
@@ -504,17 +486,15 @@ pub fn App() -> impl IntoView {
                                                     <span class="mono" style="font-size:11.5px;color:var(--text-muted);">
                                                         {repo_display}
                                                     </span>
-                                                    <span class="badge">
-                                                        {format!("{cand_count} candidates")}
-                                                    </span>
+                                                    <span class="badge">{cand_label}</span>
                                                 </div>
 
                                                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                                     <span class=move || {
                                                         match sse_status.get().as_str() {
-                                                            "LIVE SSE" => "badge badge-emerald",
-                                                            "RECONNECTING" => "badge badge-amber",
-                                                            "OFFLINE" => "badge badge-red",
+                                                            "Live" => "badge badge-emerald",
+                                                            "Reconnecting" => "badge badge-amber",
+                                                            "Disconnected" => "badge badge-red",
                                                             _ => "badge badge-cyan",
                                                         }
                                                     }>
@@ -526,7 +506,7 @@ pub fn App() -> impl IntoView {
                                                         on:click=move |_| show_telemetry.update(|v| *v = !*v)
                                                     >
                                                         {move || format!(
-                                                            "{} Telemetry ({})",
+                                                            "{} Agent Trace ({})",
                                                             if show_telemetry.get() { "Hide" } else { "Show" },
                                                             telemetry_logs.get().len()
                                                         )}
@@ -576,7 +556,7 @@ pub fn App() -> impl IntoView {
                                                     {if entries.is_empty() {
                                                         view! {
                                                             <div style="color:var(--text-dim);">
-                                                                "Listening for streaming Gemini 4 agent telemetry frames..."
+                                                                "Waiting for live agent activity..."
                                                             </div>
                                                         }.into_any()
                                                     } else {
@@ -607,59 +587,35 @@ pub fn App() -> impl IntoView {
 
                             {move || loading_session.get().then(|| view! {
                                 <div class="alert-banner">
-                                    "Loading tournament session state from epicenter-server..."
+                                    "Loading comparison session..."
                                 </div>
                             })}
 
-                            // Multimodal Evidence & Hydrogen Findings Panel (shown whenever session carries media or findings)
+                            // Attached Evidence & Findings Panel (shown whenever session carries media or findings)
                             {move || has_multimodal_evidence.get().then(|| view! {
                                 <MultimodalEvidencePanel session=active_session_signal />
                             })}
 
-                            // Split-Screen Analysis Studio: Ripple Map + Pareto/Arena Panel
-                            <section class="analysis-split">
-                                <div class="panel viz-host">
-                                    <div class="panel-header">
-                                        <div>
-                                            <h2 class="panel-title">
-                                                <span class="model-dot dot-cyan"></span>
-                                                "Concentric Blast-Radius Ripple Map"
-                                            </h2>
-                                            <div class="panel-subtitle">
-                                                "Ring 0 mutated epicenter -> Ring 1 direct callers -> Ring 2 entrypoints & Dark Zones"
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="panel-body">
-                                        <BlastRadiusRippleMap
-                                            session=active_session_signal
-                                            selected_strategy_id=selected_strategy_id
-                                        />
-                                    </div>
-                                </div>
+                            // Full-width Candidate Approaches Selector
+                            <CandidateApproachesStrip
+                                session=active_session_signal
+                                selected_strategy_id=selected_strategy_id
+                            />
 
-                                <div class="panel viz-host">
-                                    <div class="panel-header">
-                                        <div>
-                                            <h2 class="panel-title">
-                                                <span class="model-dot dot-amber"></span>
-                                                "Dual-Score Pareto Frontier & Arena Benchmarks"
-                                            </h2>
-                                            <div class="panel-subtitle">
-                                                "Click any strategy card or Pareto point to inspect its ripple map, diff, and hazards"
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="panel-body">
-                                        <ParetoAndArenaPanel
-                                            session=active_session_signal
-                                            selected_strategy_id=selected_strategy_id
-                                        />
-                                    </div>
-                                </div>
+                            // Split-Screen Analysis: Code Impact Map + Trade-Off & Performance
+                            <section class="analysis-split">
+                                <BlastRadiusRippleMap
+                                    session=active_session_signal
+                                    selected_strategy_id=selected_strategy_id
+                                />
+
+                                <ParetoAndArenaPanel
+                                    session=active_session_signal
+                                    selected_strategy_id=selected_strategy_id
+                                />
                             </section>
 
-                            // Bottom Deck: 2-Speaker War-Room TTS Audio + Unified Diff + Export / 1-Click PR
+                            // Bottom Deck: Summary, Audio Walkthrough, Code Diff & Export
                             <BriefingAndHandoffDeck
                                 session=active_session_signal
                                 selected_strategy_id=selected_strategy_id

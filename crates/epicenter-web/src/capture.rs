@@ -155,8 +155,6 @@ pub fn MultimodalIntakeDeck(
     let active_recorder = StoredValue::new_local(Option::<ActiveRecorder>::None);
 
     let submitting = RwSignal::new(false);
-    let loading_preset = RwSignal::new(false);
-    let preset_pr_url = RwSignal::new(Option::<String>::None);
     let error_msg = RwSignal::new(Option::<String>::None);
     let status_note = RwSignal::new(Option::<String>::None);
 
@@ -303,7 +301,7 @@ pub fn MultimodalIntakeDeck(
                                     let name = meta.filename.clone();
                                     attachments.update(|list| list.push(meta));
                                     status_note.set(Some(format!(
-                                        "Captured and uploaded '{name}' for Hydrogen intake."
+                                        "Captured and uploaded '{name}'."
                                     )));
                                 }
                                 Err(err) => {
@@ -344,74 +342,6 @@ pub fn MultimodalIntakeDeck(
             if let Some(rec) = slot.as_ref() {
                 rec.request_stop();
             }
-        });
-    };
-
-    let load_github_preset = move |_| {
-        if loading_preset.get_untracked() {
-            return;
-        }
-        loading_preset.set(true);
-        error_msg.set(None);
-        status_note.set(Some(
-            "Loading pinned pallets/click#3884 bug preset & terminal screenshot from server..."
-                .to_string(),
-        ));
-
-        spawn_local(async move {
-            match api_client::load_real_bug_preset().await {
-                Ok(resp) => {
-                    repo_url.set(resp.repo_url);
-                    commit_sha.set(resp.commit_sha.unwrap_or_default());
-                    git_ref.set(resp.git_ref.unwrap_or_default());
-                    task_kind.set(resp.task_kind);
-                    title.set(resp.title);
-                    problem_statement.set(resp.problem_statement);
-                    preset_pr_url.set(resp.pr_url);
-
-                    let attached_note = if let Some(att) = resp.attachment {
-                        let name = att.filename.clone();
-                        attachments.update(|list| {
-                            if let Some(existing) = list
-                                .iter_mut()
-                                .find(|x| x.id == att.id || x.filename == att.filename)
-                            {
-                                *existing = att;
-                            } else {
-                                list.push(att);
-                            }
-                        });
-                        format!(" with screenshot '{name}' queued for Stage 1 Hydrogen")
-                    } else {
-                        " (server returned no preset screenshot)".to_string()
-                    };
-
-                    status_note.set(Some(format!(
-                        "Loaded real pinned GitHub bug preset (pallets/click#3884){attached_note}."
-                    )));
-                }
-                Err(err) => {
-                    repo_url.set("https://github.com/pallets/click".to_string());
-                    commit_sha.set("bb695aaecdef95832d167fc1d508921745aa824e".to_string());
-                    git_ref.set(String::new());
-                    task_kind.set(TaskKind::Bug);
-                    title.set(
-                        "Fix show_envvar output for a sequence or an empty envvar (pallets/click#3884)"
-                            .to_string(),
-                    );
-                    problem_statement.set(
-                        "In pallets/click, Option(show_envvar=True) produces broken help output when envvar is an empty string/sequence (emitting an empty '[env var: ]' suffix) or a sequence of environment variable names. Reproduce on pinned parent commit bb695aa with a failing pytest Red-Gate test covering empty and sequence envvars in Option.get_help_extra / show_envvar, then compare parallel strategies and audit caller blast radius."
-                            .to_string(),
-                    );
-                    preset_pr_url.set(Some(
-                        "https://github.com/pallets/click/pull/3884".to_string(),
-                    ));
-                    status_note.set(Some(format!(
-                        "Server preset endpoint unreachable ({err}) — populated real pinned pallets/click#3884 metadata (commit bb695aa) locally without auto-attaching the server screenshot. Drop a screenshot manually or verify epicenter-server is running."
-                    )));
-                }
-            }
-            loading_preset.set(false);
         });
     };
 
@@ -496,7 +426,7 @@ pub fn MultimodalIntakeDeck(
 
         submitting.set(true);
         error_msg.set(None);
-        status_note.set(Some("Initializing Gemini 4 tournament session...".to_string()));
+        status_note.set(Some("Starting comparison session...".to_string()));
 
         spawn_local(async move {
             match api_client::create_session(&req).await {
@@ -520,71 +450,45 @@ pub fn MultimodalIntakeDeck(
                 <div>
                     <h2 class="panel-title">
                         <span class="model-dot dot-cyan"></span>
-                        "Multimodal Intake Deck"
-                        <span class="badge badge-cyan">"Gemini 4 Hydrogen"</span>
+                        "Multimodal Intake"
                     </h2>
                     <div class="panel-subtitle">
-                        "Media-first bug intake — capture screenshots, screen recordings, or voice notes directly into the 7-stage Gemini 4 tournament."
+                        "Upload screenshots, screen recordings, voice notes or directly type your issue"
                     </div>
-                </div>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    {move || preset_pr_url.get().map(|pr_url| view! {
-                        <a
-                            href=pr_url
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="badge badge-emerald"
-                            style="text-decoration:none;"
-                        >
-                            "Pinned PR Reference ↗"
-                        </a>
-                    })}
-                    <button
-                        type="button"
-                        class="btn btn-amber btn-sm"
-                        disabled=move || loading_preset.get()
-                        on:click=load_github_preset
-                    >
-                        {move || if loading_preset.get() {
-                            "Loading Real Bug Preset..."
-                        } else {
-                            "Load Real GitHub Bug Preset (with Screenshot)"
-                        }}
-                    </button>
                 </div>
             </div>
 
             <form class="panel-body" on:submit=on_submit>
-                // Visual flow strip explaining how captured media drives every stage of Epicenter
-                <div class="pipeline-flow-strip" aria-label="Multimodal pipeline flow">
+                // Clean jargon-free overview of the comparison pipeline
+                <div class="pipeline-flow-strip" aria-label="Comparison workflow">
                     <span class="pipeline-flow-step active">
                         <span class="model-dot dot-cyan"></span>
-                        <strong>"Stage 1 Hydrogen"</strong>
-                        "Media → Symbols & Repro"
+                        <strong>"1. Intake"</strong>
+                        "Extract clues from media & notes"
                     </span>
                     <span class="pipeline-flow-arrow">"→"</span>
                     <span class="pipeline-flow-step">
                         <span class="model-dot dot-red"></span>
-                        <strong>"Stage 2 Red-Gate"</strong>
-                        "Host-Verified HEAD Fail"
+                        <strong>"2. Repro Test"</strong>
+                        "Verify a failing test before editing"
                     </span>
                     <span class="pipeline-flow-arrow">"→"</span>
                     <span class="pipeline-flow-step">
                         <span class="model-dot dot-emerald"></span>
-                        <strong>"Stage 3–4 Strategies"</strong>
-                        "Parallel Sandboxes"
+                        <strong>"3. Implement"</strong>
+                        "Build multiple fixes in isolation"
                     </span>
                     <span class="pipeline-flow-arrow">"→"</span>
                     <span class="pipeline-flow-step">
                         <span class="model-dot dot-violet"></span>
-                        <strong>"Stage 6 Carbon Audit"</strong>
-                        "Blast-Radius & Hazards"
+                        <strong>"4. Benchmark & Audit"</strong>
+                        "Measure speed & code impact"
                     </span>
                     <span class="pipeline-flow-arrow">"→"</span>
                     <span class="pipeline-flow-step">
                         <span class="model-dot dot-amber"></span>
-                        <strong>"Stage 7 Flash TTS"</strong>
-                        "2-Speaker War-Room Briefing"
+                        <strong>"5. Summary"</strong>
+                        "Audio briefing, diff & export"
                     </span>
                 </div>
 
@@ -593,10 +497,10 @@ pub fn MultimodalIntakeDeck(
                     <div class="form-stack intake-media-col">
                         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
                             <span class="field-label" style="margin:0;color:#7dd3fc;">
-                                "1. Capture or Drop Visual / Video / Audio Evidence"
+                                "1. Capture or Upload Visual / Video / Audio Evidence"
                             </span>
                             <span class="badge badge-cyan">
-                                {move || format!("{} queued", attachments.get().len())}
+                                {move || format!("{} attached", attachments.get().len())}
                             </span>
                         </div>
 
@@ -607,10 +511,10 @@ pub fn MultimodalIntakeDeck(
                             on:drop=on_drop
                         >
                             <div class="dropzone-title">
-                                "Drop Screenshots, Screen Recordings, Voice Notes, or PDFs"
+                                "Upload Screenshots, Screen Recordings, Voice Notes, or PDFs"
                             </div>
                             <div class="dropzone-hint">
-                                ".png · .jpg · .mp4 · .webm · .gif · .wav · .mp3 · .pdf — streamed to Gemini 4 Hydrogen for visual trace & symbol extraction"
+                                ".png · .jpg · .mp4 · .webm · .gif · .wav · .mp3 · .pdf — drag & drop or browse"
                             </div>
 
                             <input
@@ -632,7 +536,7 @@ pub fn MultimodalIntakeDeck(
                                         }
                                     }
                                 >
-                                    "Browse Media Files"
+                                    "Browse Files"
                                 </button>
 
                                 {move || match recording_mode.get() {
@@ -656,14 +560,14 @@ pub fn MultimodalIntakeDeck(
                                                 class="btn btn-sm"
                                                 on:click=move |_| start_capture(RecordingMode::Screen)
                                             >
-                                                "Record Screen Bug"
+                                                "Record Screen"
                                             </button>
                                             <button
                                                 type="button"
                                                 class="btn btn-sm"
                                                 on:click=move |_| start_capture(RecordingMode::Voice)
                                             >
-                                                "Record Voice Brief"
+                                                "Record Voice Note"
                                             </button>
                                         </>
                                     }.into_any(),
@@ -679,7 +583,7 @@ pub fn MultimodalIntakeDeck(
 
                             {move || (uploading_count.get() > 0).then(|| view! {
                                 <div style="margin-top:8px;font-size:11px;color:#7dd3fc;font-family:var(--font-mono);">
-                                    {move || format!("Uploading {} file(s) to /api/attachments...", uploading_count.get())}
+                                    {move || format!("Uploading {} file(s)...", uploading_count.get())}
                                 </div>
                             })}
                         </div>
@@ -690,7 +594,7 @@ pub fn MultimodalIntakeDeck(
                             if items.is_empty() {
                                 view! {
                                     <div class="intake-preview-empty">
-                                        "No media queued yet — click \"Load Real GitHub Bug Preset (with Screenshot)\" above, drop a failing terminal screenshot, or record a live screen/voice clip."
+                                        "No media attached yet — upload a screenshot, screen recording, voice note, or PDF above."
                                     </div>
                                 }.into_any()
                             } else {
@@ -744,7 +648,7 @@ pub fn MultimodalIntakeDeck(
                                                             class="mono"
                                                             style="font-size:11.5px;"
                                                         >
-                                                            "Inspect Raw File ↗"
+                                                            "Open File ↗"
                                                         </a>
                                                     </div>
                                                 }.into_any(),
@@ -781,25 +685,25 @@ pub fn MultimodalIntakeDeck(
                         }}
                     </div>
 
-                    // Right Column: Target Repository & Problem Contract
+                    // Right Column: Target Repository & Issue Context
                     <div class="form-stack">
                         <span class="field-label" style="margin:0;color:#cbd5e1;">
-                            "2. Target Repository & Bug / Feature Context"
+                            "2. Target Repository & Issue Context"
                         </span>
 
                         <div class="form-row-3">
                             <div>
-                                <label class="field-label">"Target GitHub Repository URL"</label>
+                                <label class="field-label">"GitHub Repository URL"</label>
                                 <input
                                     type="url"
                                     class="input mono"
-                                    placeholder="https://github.com/pallets/click"
+                                    placeholder="https://github.com/owner/repo"
                                     prop:value=move || repo_url.get()
                                     on:input=move |ev| repo_url.set(event_target_value(&ev))
                                 />
                             </div>
                             <div>
-                                <label class="field-label">"Commit SHA (Pinned)"</label>
+                                <label class="field-label">"Commit SHA (Optional)"</label>
                                 <input
                                     type="text"
                                     class="input mono"
@@ -809,7 +713,7 @@ pub fn MultimodalIntakeDeck(
                                 />
                             </div>
                             <div>
-                                <label class="field-label">"Git Ref (Optional)"</label>
+                                <label class="field-label">"Branch / Ref (Optional)"</label>
                                 <input
                                     type="text"
                                     class="input mono"
@@ -822,14 +726,14 @@ pub fn MultimodalIntakeDeck(
 
                         <div class="form-row-2">
                             <div>
-                                <label class="field-label">"Task Kind"</label>
+                                <label class="field-label">"Task Type"</label>
                                 <div class="task-kind-toggle">
                                     <button
                                         type="button"
                                         class=move || if task_kind.get() == TaskKind::Bug { "kind-btn active" } else { "kind-btn" }
                                         on:click=move |_| task_kind.set(TaskKind::Bug)
                                     >
-                                        "Bug Fix (Failing Red-Gate)"
+                                        "Bug Fix"
                                     </button>
                                     <button
                                         type="button"
@@ -845,7 +749,7 @@ pub fn MultimodalIntakeDeck(
                                 <input
                                     type="text"
                                     class="input"
-                                    placeholder="Short headline for tournament brief"
+                                    placeholder="Short headline for this comparison"
                                     prop:value=move || title.get()
                                     on:input=move |ev| title.set(event_target_value(&ev))
                                 />
@@ -853,10 +757,10 @@ pub fn MultimodalIntakeDeck(
                         </div>
 
                         <div>
-                            <label class="field-label">"Problem Statement / Failure Notes"</label>
+                            <label class="field-label">"Problem Statement / Notes"</label>
                             <textarea
                                 class="textarea"
-                                placeholder="Describe the bug, expected vs. actual behavior, performance target, or paste crash logs..."
+                                placeholder="Describe the bug, expected vs. actual behavior, performance target, or paste error logs..."
                                 prop:value=move || problem_statement.get()
                                 on:input=move |ev| problem_statement.set(event_target_value(&ev))
                             ></textarea>
@@ -874,12 +778,12 @@ pub fn MultimodalIntakeDeck(
                             <button
                                 type="submit"
                                 class="btn btn-primary"
-                                disabled=move || submitting.get() || loading_preset.get() || (uploading_count.get() != 0) || recording_mode.get().is_some()
+                                disabled=move || submitting.get() || (uploading_count.get() != 0) || recording_mode.get().is_some()
                             >
                                 {move || if submitting.get() {
-                                    "Launching Gemini 4 Tournament..."
+                                    "Starting Comparison..."
                                 } else {
-                                    "Launch Epicenter Tournament"
+                                    "Launch Comparison"
                                 }}
                             </button>
                         </div>
