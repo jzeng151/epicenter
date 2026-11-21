@@ -155,16 +155,18 @@ pub async fn run_arena_stage(
          - Measured Interleaved Trials: {trials}\n\
          - Metric Unit: {unit}\n\
          - Optional Script:\n{script}\n\n\
-         RED-GATE TEST COMMAND (for per-candidate coverage capture): {test_cmd}\n\n\
+         RED-GATE TEST COMMAND (for per-candidate coverage capture): {test_cmd}\n\
+         LOCKED RED-GATE REPRO PATCH (save to `/tmp/repro_gate.patch` and apply alongside each candidate during step 4 coverage capture if non-empty):\n\
+         ```diff\n{repro_patch}\n```\n\n\
          PASSING CANDIDATE PATCHES:\n\
          {candidate_blocks}\n\n\
          STRICT INTERLEAVED PROTOCOL:\n\
-         1. Save each candidate's unified diff to `/tmp/<strategy_id>.patch`.\n\
+         1. Save each candidate's unified diff to `/tmp/<strategy_id>.patch` (and save the locked Red-Gate repro patch to `/tmp/repro_gate.patch` if non-empty).\n\
          2. Run `{warmup}` warmup iterations.\n\
          3. For trial `t = 0 .. {trials}`:\n\
             - Ensure clean baseline (`git checkout -- . && git clean -fd`), time the benchmark command in milliseconds -> append to `baseline_samples_ms`.\n\
             - For EACH candidate in order: `git apply /tmp/<strategy_id>.patch`, time the benchmark command in milliseconds (and capture `peak_memory_kb` and optional `call_or_query_count`), then revert (`git checkout -- . && git clean -fd`).\n\
-         4. After timing trials, for each candidate apply its patch once, run the test suite with coverage (`coverage json` or `lcov.info` if available) and embed the coverage string (or null if unavailable), then revert.\n\n\
+         4. After timing trials, for each candidate apply `/tmp/repro_gate.patch` (if non-empty) + `/tmp/<strategy_id>.patch`, run `{test_cmd}` with coverage (`python3 -m coverage run -m pytest ... && python3 -m coverage json -o -` or `lcov.info` if available) and embed the coverage string (or null if unavailable), then revert.\n\n\
          Return STRICT JSON ONLY:\n\
          {{\n\
            \"baseline_samples_ms\": [100.2, 99.8, ...],\n\
@@ -190,6 +192,7 @@ pub async fn run_arena_stage(
             .as_deref()
             .unwrap_or("(none — run benchmark command directly)"),
         test_cmd = red_gate.test_command(),
+        repro_patch = truncate_str(red_gate.patch(), 8_000),
     );
 
     let mut req = CreateInteractionRequest::for_agent(worker_agent_id, prompt);

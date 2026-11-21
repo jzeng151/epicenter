@@ -18,7 +18,7 @@ use tokio::sync::broadcast;
 use tracing::warn;
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_secs(3);
-const WORKER_TIMEOUT: Duration = Duration::from_secs(360);
+const WORKER_TIMEOUT: Duration = Duration::from_secs(720);
 
 #[derive(Debug, Deserialize)]
 struct WorkerOutput {
