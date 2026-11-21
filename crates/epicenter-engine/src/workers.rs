@@ -8,7 +8,7 @@ use epicenter_common::{
     CandidateResult, CandidateStatus, Gemini4Model, LiveEvent, LogLevel, RedGateSpec,
     StrategyDepthTier, StrategyPlan, StrategySpec, TournamentSession, TournamentStage,
 };
-use epicenter_gemini::{CreateInteractionRequest, GeminiClient, ResponseFormat};
+use epicenter_gemini::{CreateInteractionRequest, GeminiClient, GenerationConfig, ResponseFormat};
 use serde::Deserialize;
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -307,6 +307,7 @@ async fn execute_single_worker(
                 .to_string(),
         );
         req.response_format = Some(ResponseFormat::json_schema(worker_edit_schema()));
+        req.generation_config = worker_generation_config(iter, is_rescue_candidate);
 
         let api_res = tokio::time::timeout(remaining, gemini.create_interaction(&req)).await;
         let resp = match api_res {
@@ -602,6 +603,25 @@ async fn design_carbon_rescue_strategy(
             "Avoid repeating failing patches from initial K candidates.".to_string(),
         ],
         allow_caller_tests: true,
+    }
+}
+
+/// Adaptive reasoning depth for Stage 4 parallel workers:
+/// - Loop 1 on regular parallel `Neon` workers (`iter == 1 && !is_rescue_candidate`): `"low"`
+///   thinking for fast first-pass patch synthesis.
+/// - Retry loops (`iter >= 2`) and `0/K` `Carbon` rescue candidates: `None` (default deeper
+///   thinking) so tough retries and rescue fixes automatically think deeper.
+pub(crate) fn worker_generation_config(
+    iter: u8,
+    is_rescue_candidate: bool,
+) -> Option<GenerationConfig> {
+    if iter == 1 && !is_rescue_candidate {
+        Some(GenerationConfig {
+            thinking_level: Some("low".to_string()),
+            ..Default::default()
+        })
+    } else {
+        None
     }
 }
 

@@ -5,7 +5,7 @@ use epicenter_common::{
     BenchmarkHarnessSpec, Gemini4Model, LiveEvent, LogLevel, RedGateSpec, StrategyDepthTier,
     StrategyPlan, StrategySpec, TournamentSession, TournamentStage,
 };
-use epicenter_gemini::{CreateInteractionRequest, GeminiClient, ResponseFormat};
+use epicenter_gemini::{CreateInteractionRequest, GeminiClient, GenerationConfig, ResponseFormat};
 use serde_json::json;
 use std::collections::HashSet;
 use tokio::sync::broadcast;
@@ -86,6 +86,7 @@ pub async fn run_planner_stage(
             .to_string(),
     );
     req.response_format = Some(ResponseFormat::json_schema(strategy_plan_schema()));
+    req.generation_config = Some(planner_generation_config());
 
     let plan = match gemini.create_interaction(&req).await {
         Ok(resp) => {
@@ -145,6 +146,13 @@ pub async fn run_planner_stage(
     );
 
     Ok(plan)
+}
+
+pub(crate) fn planner_generation_config() -> GenerationConfig {
+    GenerationConfig {
+        thinking_level: Some("low".to_string()),
+        ..Default::default()
+    }
 }
 
 /// Normalizes strategy IDs, enforces `1..=5` clamping and uniqueness, ensures `allow_caller_tests`
