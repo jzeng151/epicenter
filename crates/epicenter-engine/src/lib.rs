@@ -751,4 +751,40 @@ Done!
         assert!(d1.is_empty());
         assert!(d2.is_empty());
     }
+
+    #[test]
+    fn adaptive_thinking_levels_use_low_for_fast_path_and_escalate_on_retries() {
+        // Stage 3 Carbon planner & Stage 6 concurrent Carbon auditor use low thinking.
+        let planner_cfg = planner::planner_generation_config();
+        assert_eq!(planner_cfg.thinking_level.as_deref(), Some("low"));
+        assert_eq!(
+            serde_json::to_value(&planner_cfg).unwrap(),
+            serde_json::json!({ "thinking_level": "low" })
+        );
+
+        let auditor_cfg = auditor::auditor_generation_config();
+        assert_eq!(auditor_cfg.thinking_level.as_deref(), Some("low"));
+
+        // Stage 2 Bug Red-Gate: attempt 1 (Neon 1/2) uses low; attempt 2 & Carbon escalation escalate.
+        assert_eq!(
+            red_gate::bug_red_gate_generation_config(1)
+                .and_then(|c| c.thinking_level)
+                .as_deref(),
+            Some("low")
+        );
+        assert!(red_gate::bug_red_gate_generation_config(2).is_none());
+        assert!(red_gate::bug_red_gate_generation_config(3).is_none());
+
+        // Stage 4 workers: loop 1 regular Neon uses low; retry loops & 0/K Carbon rescue escalate.
+        assert_eq!(
+            workers::worker_generation_config(1, false)
+                .and_then(|c| c.thinking_level)
+                .as_deref(),
+            Some("low")
+        );
+        assert!(workers::worker_generation_config(2, false).is_none());
+        assert!(workers::worker_generation_config(3, false).is_none());
+        assert!(workers::worker_generation_config(1, true).is_none());
+        assert!(workers::worker_generation_config(2, true).is_none());
+    }
 }

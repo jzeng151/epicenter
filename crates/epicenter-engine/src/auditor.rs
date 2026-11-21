@@ -5,7 +5,7 @@ use epicenter_common::{
     Gemini4Model, HazardSeverity, LiveEvent, LogLevel, SemanticHazard, StrategyDepthTier,
     TournamentSession, TournamentStage,
 };
-use epicenter_gemini::{CreateInteractionRequest, GeminiClient, ResponseFormat};
+use epicenter_gemini::{CreateInteractionRequest, GeminiClient, GenerationConfig, ResponseFormat};
 use epicenter_graph::{BlastAnalysisConfig, CoverageMap, RepoCallGraph};
 use serde::Deserialize;
 use serde_json::json;
@@ -314,9 +314,17 @@ async fn run_carbon_semantic_audit(
             .to_string(),
     );
     req.response_format = Some(ResponseFormat::json_schema(carbon_audit_schema()));
+    req.generation_config = Some(auditor_generation_config());
 
     let resp = gemini.create_interaction(&req).await?;
     extract_json_from_text::<CarbonAuditOutput>(&resp.extract_text())
+}
+
+pub(crate) fn auditor_generation_config() -> GenerationConfig {
+    GenerationConfig {
+        thinking_level: Some("low".to_string()),
+        ..Default::default()
+    }
 }
 
 fn summarize_nodes(nodes: &[epicenter_common::GraphNode]) -> String {

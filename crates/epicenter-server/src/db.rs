@@ -378,8 +378,9 @@ impl DbStore {
         }
     }
 
-    /// Returns the newest non-simulated `FiveSigmaEval` from SQLite. If the table is empty,
-    /// checks `eval_seed_path` on disk and only seeds/returns it when its label is NOT simulated.
+    /// Returns the newest non-simulated `FiveSigmaEval` from SQLite. If no non-simulated row exists
+    /// in SQLite (whether `eval_runs` is empty or contains only stale simulated rows), falls through
+    /// to check `eval_seed_path` on disk and only seeds/returns it when its label is NOT simulated.
     /// Never presents dry-run, offline, seed, or simulated results as real evaluations.
     pub fn get_latest_eval_run_or_seed(&self) -> Result<Option<FiveSigmaEval>> {
         let blobs: Vec<String> = {
@@ -397,15 +398,12 @@ impl DbStore {
             out
         };
 
-        if !blobs.is_empty() {
-            for blob in blobs {
-                let eval: FiveSigmaEval =
-                    serde_json::from_str(&blob).context("failed to deserialize eval_run")?;
-                if !is_simulated_eval_label(&eval.label) {
-                    return Ok(Some(eval));
-                }
+        for blob in blobs {
+            let eval: FiveSigmaEval =
+                serde_json::from_str(&blob).context("failed to deserialize eval_run")?;
+            if !is_simulated_eval_label(&eval.label) {
+                return Ok(Some(eval));
             }
-            return Ok(None);
         }
 
         if self.eval_seed_path.exists() {

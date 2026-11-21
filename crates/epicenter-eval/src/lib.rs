@@ -758,4 +758,30 @@ See docs at https://realhost.io/docs/guide (not media!) and flamegraph https://c
         assert_eq!(roundtrip.run_id, eval.run_id);
         assert_eq!(roundtrip.outcomes.len(), 2);
     }
+
+    #[tokio::test]
+    async fn arm1_baseline_loads_real_checked_out_sources_and_falls_back_gracefully() {
+        let (_repo_dir, case, _fix, _incomplete, _regressing) = create_temp_python_git_repo();
+        let cache_dir = tempfile::tempdir().unwrap();
+        let verifier =
+            epicenter_engine::verifier::HostVerifier::with_cache_root(cache_dir.path().to_path_buf());
+
+        let sources =
+            crate::runner::load_arm1_baseline_sources_with_verifier(&verifier, &case).await;
+        assert!(
+            sources.contains_key("src/calc/core.py"),
+            "Arm 1 must receive real checked-out source files, got keys: {:?}",
+            sources.keys().collect::<Vec<_>>()
+        );
+        assert!(sources.contains_key("src/calc/service.py"));
+        assert!(sources["src/calc/core.py"].contains("def strip_port_auth"));
+
+        // Invalid/missing repository must fall back cleanly to an empty map without failing.
+        let mut bad_case = case;
+        bad_case.repo_url = "/nonexistent/epicenter/missing-repo".to_string();
+        bad_case.parent_commit = "0000000000000000000000000000000000000000".to_string();
+        let fallback =
+            crate::runner::load_arm1_baseline_sources_with_verifier(&verifier, &bad_case).await;
+        assert!(fallback.is_empty());
+    }
 }

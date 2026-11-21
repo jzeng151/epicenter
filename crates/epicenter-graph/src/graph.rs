@@ -308,8 +308,8 @@ impl RepoCallGraph {
             callers.sort_by(|&a, &b| sort_key(&self.graph[a]).cmp(&sort_key(&self.graph[b])));
 
             for caller in callers {
-                if !depth_map.contains_key(&caller) {
-                    depth_map.insert(caller, curr_depth + 1);
+                if let std::collections::hash_map::Entry::Vacant(entry) = depth_map.entry(caller) {
+                    entry.insert(curr_depth + 1);
                     queue.push_back(caller);
                 }
             }

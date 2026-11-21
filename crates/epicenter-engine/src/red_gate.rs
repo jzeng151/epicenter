@@ -8,7 +8,7 @@ use epicenter_common::{
     BugRedGate, FeatureRedGate, Gemini4Model, LiveEvent, LogLevel, RedGateResolution, RedGateSpec,
     TaskKind, TournamentSession, TournamentStage,
 };
-use epicenter_gemini::{CreateInteractionRequest, GeminiClient, ResponseFormat};
+use epicenter_gemini::{CreateInteractionRequest, GeminiClient, GenerationConfig, ResponseFormat};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -184,6 +184,7 @@ async fn run_bug_red_gate(
                 .to_string(),
         );
         req.response_format = Some(ResponseFormat::json_schema(bug_red_gate_schema()));
+        req.generation_config = bug_red_gate_generation_config(attempt_num);
 
         let resp = match gemini.create_interaction(&req).await {
             Ok(r) => r,
@@ -415,6 +416,21 @@ async fn run_feature_red_gate(
         test_command: prepared.default_test_command(None),
         base_environment_id: None,
     })
+}
+
+/// Adaptive reasoning depth for Stage 2 Bug Red-Gate:
+/// - Attempt 1 (`Neon 1/2`): `"low"` thinking for fast first-pass repro authoring.
+/// - Attempt 2 (`Neon 2/2`) & Attempt 3 (`Carbon` escalation): `None` (default deeper thinking)
+///   so harder bugs automatically escalate reasoning depth.
+pub(crate) fn bug_red_gate_generation_config(attempt_num: u8) -> Option<GenerationConfig> {
+    if attempt_num == 1 {
+        Some(GenerationConfig {
+            thinking_level: Some("low".to_string()),
+            ..Default::default()
+        })
+    } else {
+        None
+    }
 }
 
 fn suggested_repro_path(runtime: RepoRuntime, file_tree: &[String]) -> String {

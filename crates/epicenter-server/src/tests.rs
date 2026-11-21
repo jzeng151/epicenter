@@ -300,8 +300,7 @@ async fn session_audio_endpoint_serves_404_when_missing_and_wav_when_stored() {
     // Missing -> 404.
     let missing_resp = get_session_audio(State(state.clone()), Path(session_id))
         .await
-        .err()
-        .expect("should return 404")
+        .expect_err("should return 404")
         .into_response();
     assert_eq!(missing_resp.status(), StatusCode::NOT_FOUND);
 
@@ -827,6 +826,61 @@ async fn eval_latest_refuses_simulated_seed_and_returns_only_live_runs() {
         .expect("must return real live eval run");
     assert_eq!(latest.run_id, live_run.run_id);
     assert_eq!(latest.label, "Live Judge: pallets/click#3884");
+}
+
+#[tokio::test]
+async fn eval_latest_falls_through_to_live_disk_artifact_when_db_only_has_simulated_rows() {
+    // Prepare a genuine live FiveSigmaEval JSON artifact on disk.
+    let live_disk_eval = sample_eval_run_with_label("live-five-sigma-unseen");
+    let seed_path =
+        std::env::temp_dir().join(format!("epicenter_live_fallthrough_{}.json", Uuid::new_v4()));
+    std::fs::write(
+        &seed_path,
+        serde_json::to_string_pretty(&live_disk_eval).unwrap(),
+    )
+    .unwrap();
+
+    // Populate SQLite with ONLY stale simulated rows.
+    let db = DbStore::open_in_memory()
+        .unwrap()
+        .with_eval_seed_path(&seed_path);
+    let stale_sim = sample_eval_run_with_label("offline-dry-run-baseline-seed");
+    db.upsert_eval_run(&stale_sim).unwrap();
+
+    // Must fall through to disk, seed/persist the live artifact, and return it.
+    let loaded = db
+        .get_latest_eval_run_or_seed()
+        .unwrap()
+        .expect("must fall through to live disk artifact when DB only has simulated rows");
+    assert_eq!(loaded.run_id, live_disk_eval.run_id);
+    assert_eq!(loaded.label, "live-five-sigma-unseen");
+
+    // Remove the disk file and verify it was persisted into SQLite for subsequent reads.
+    let _ = std::fs::remove_file(&seed_path);
+    let persisted = db
+        .get_latest_eval_run_or_seed()
+        .unwrap()
+        .expect("live disk artifact should now be cached in SQLite");
+    assert_eq!(persisted.run_id, live_disk_eval.run_id);
+
+    // Also confirm that if disk ALSO has a simulated artifact, fallthrough still refuses it.
+    let sim_disk_path =
+        std::env::temp_dir().join(format!("epicenter_sim_fallthrough_{}.json", Uuid::new_v4()));
+    let sim_disk_eval = sample_eval_run_with_label("simulated-dry-run-artifact");
+    std::fs::write(
+        &sim_disk_path,
+        serde_json::to_string_pretty(&sim_disk_eval).unwrap(),
+    )
+    .unwrap();
+    let db_sim_only = DbStore::open_in_memory()
+        .unwrap()
+        .with_eval_seed_path(&sim_disk_path);
+    db_sim_only.upsert_eval_run(&stale_sim).unwrap();
+    assert!(
+        db_sim_only.get_latest_eval_run_or_seed().unwrap().is_none(),
+        "fallthrough must still refuse simulated disk artifacts"
+    );
+    let _ = std::fs::remove_file(&sim_disk_path);
 }
 
 #[tokio::test]
