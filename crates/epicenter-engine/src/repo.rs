@@ -9,7 +9,7 @@ use uuid::Uuid;
 /// Maximum number of source files fetched over GitHub raw content API per tournament session.
 const MAX_FETCHED_FILES: usize = 45;
 /// Maximum byte size of an individual source file fetched into memory.
-const MAX_FILE_BYTES: usize = 120_000;
+pub(crate) const MAX_FILE_BYTES: usize = 120_000;
 /// Maximum number of file tree entries forwarded to LLM prompts.
 pub const MAX_TREE_PROMPT_ENTRIES: usize = 250;
 
@@ -90,6 +90,11 @@ impl RepoSnapshot {
             }
         }
         for (path, content) in &self.sources {
+            if !is_test_like_path(path) && included.insert(path.as_str()) {
+                ordered.push((path, content));
+            }
+        }
+        for (path, content) in &self.sources {
             if included.insert(path.as_str()) {
                 ordered.push((path, content));
             }
@@ -110,6 +115,82 @@ impl RepoSnapshot {
         }
         buf
     }
+
+    /// Formats 1–3 representative existing test files (plus `conftest.py` if present) so Stage 2
+    /// Red-Gate sees real repository test conventions, imports, and fixtures.
+    pub fn prompt_test_examples(&self, suspect_files: &[String], max_chars: usize) -> String {
+        let stems: Vec<String> = suspect_files
+            .iter()
+            .filter_map(|s| {
+                let norm = normalize_rel_path(s);
+                let file = norm.rsplit('/').next()?;
+                let stem = file.split('.').next()?;
+                if stem.len() >= 3 {
+                    Some(stem.to_ascii_lowercase())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let mut scored: Vec<(i32, &String, &String)> = self
+            .sources
+            .iter()
+            .filter(|(p, _)| is_test_like_path(p) || p.ends_with("conftest.py"))
+            .map(|(p, c)| {
+                let lower = p.to_ascii_lowercase();
+                let mut score = 10;
+                if lower.ends_with("conftest.py") {
+                    score += 80;
+                }
+                for stem in &stems {
+                    if lower.contains(stem) {
+                        score += 50;
+                    }
+                }
+                if c.len() <= 8_000 {
+                    score += 15;
+                }
+                (score, p, c)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+        if scored.is_empty() {
+            return "(no existing test files loaded)".to_string();
+        }
+
+        let mut buf = String::new();
+        for (_, path, content) in scored.into_iter().take(3) {
+            let section = format!("--- TEST EXAMPLE: {path} ---\n{content}\n\n");
+            if buf.len() + section.len() > max_chars {
+                let remaining = max_chars.saturating_sub(buf.len());
+                if remaining > 200 {
+                    buf.push_str(&truncate_str(&section, remaining));
+                    buf.push_str("\n...(truncated)\n");
+                }
+                break;
+            }
+            buf.push_str(&section);
+        }
+        buf
+    }
+}
+
+pub(crate) fn is_test_like_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let file = lower.rsplit('/').next().unwrap_or(&lower);
+    lower.starts_with("tests/")
+        || lower.starts_with("test/")
+        || lower.contains("/tests/")
+        || lower.contains("/test/")
+        || lower.contains("__tests__/")
+        || file.starts_with("test_")
+        || file.ends_with("_test.py")
+        || file.ends_with("_test.go")
+        || file.ends_with("_test.rs")
+        || file.contains(".test.")
+        || file.contains(".spec.")
 }
 
 /// Parses a GitHub repository URL (`https://github.com/owner/repo[.git]` or `git@github.com:owner/repo.git`).
@@ -381,21 +462,21 @@ async fn fetch_raw_files(
     results.into_iter().flatten().collect()
 }
 
-fn is_ignored_path(path: &str) -> bool {
+pub(crate) fn is_ignored_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     IGNORED_PATH_SEGMENTS
         .iter()
         .any(|seg| lower.starts_with(seg) || lower.contains(&format!("/{seg}")))
 }
 
-fn is_source_file(path: &str) -> bool {
+pub(crate) fn is_source_file(path: &str) -> bool {
     let Some(ext) = path.rsplit('.').next() else {
         return false;
     };
     SOURCE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
 }
 
-fn file_priority_score(path: &str, hints: &[String]) -> i32 {
+pub(crate) fn file_priority_score(path: &str, hints: &[String]) -> i32 {
     let lower = path.to_ascii_lowercase();
     let mut score = 10;
     for hint in hints {
