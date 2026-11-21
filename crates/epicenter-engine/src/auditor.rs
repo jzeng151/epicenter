@@ -129,19 +129,33 @@ pub async fn run_auditor_stage(
         });
     }
 
-    // Layer 3: Run Gemini 4 Carbon semantic hazard & root-cause depth audits CONCURRENTLY!
-    let audit_futs = pending.iter().map(|item| {
-        run_carbon_semantic_audit(
-            gemini,
-            &issue_title,
-            &problem_statement,
-            &multimodal_block,
-            &item.strategy_id,
-            item.tier,
-            item.added_caller_tests,
-            &item.git_diff,
-            &item.report,
+    // Layer 3: Run Gemini 4 Carbon semantic hazard & root-cause depth audits CONCURRENTLY,
+    // bounded to 35s per candidate so a slow API response never stalls Stage 6.
+    let title_ref = issue_title.as_str();
+    let problem_ref = problem_statement.as_str();
+    let multimodal_ref = multimodal_block.as_str();
+    let audit_futs = pending.iter().map(|item| async move {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(35),
+            run_carbon_semantic_audit(
+                gemini,
+                title_ref,
+                problem_ref,
+                multimodal_ref,
+                &item.strategy_id,
+                item.tier,
+                item.added_caller_tests,
+                &item.git_diff,
+                &item.report,
+            ),
         )
+        .await
+        {
+            Ok(res) => res,
+            Err(_) => Err(anyhow::anyhow!(
+                "Carbon semantic audit exceeded 35s timeout"
+            )),
+        }
     });
     let audit_results = futures::future::join_all(audit_futs).await;
 
