@@ -313,30 +313,32 @@ pub fn App() -> impl IntoView {
 
     view! {
         <div class="epicenter-app">
+            <a class="skip-link" href="#main-content">"Skip to main content"</a>
+
             // Top Header Bar
             <header class="studio-header">
                 <div class="studio-header-inner">
                     <div class="brand-cluster">
                         <div class="brand-emblem" aria-hidden="true">
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" focusable="false">
                                 <circle cx="12" cy="12" r="9.5" stroke="#38bdf8" stroke-opacity="0.35" stroke-width="1.2" stroke-dasharray="2.5 2.5" />
                                 <circle cx="12" cy="12" r="5.5" stroke="#38bdf8" stroke-opacity="0.65" stroke-width="1.4" />
                                 <circle cx="12" cy="12" r="2.2" fill="#10b981" />
                             </svg>
                         </div>
                         <div class="brand-title-group">
-                            <span class="brand-wordmark">"EPICENTER"</span>
+                            <h1 class="brand-wordmark">"EPICENTER"</h1>
                             <span class="brand-sub">"Implementation Testing Studio"</span>
                         </div>
                     </div>
 
                     <div class="header-right">
-                        <div class="status-pills">
+                        <div class="status-pills" role="status" aria-live="polite" aria-label="Server status">
                             {move || match server_status.get() {
                                 Some(st) => view! {
                                     <>
                                         <span class="status-chip ok">
-                                            <span class="model-dot dot-emerald"></span>
+                                            <span class="model-dot dot-emerald" aria-hidden="true"></span>
                                             {format!("v{}", st.version)}
                                         </span>
                                         <span class=if st.has_gemini_key { "status-chip ok" } else { "status-chip warn" }>
@@ -359,6 +361,7 @@ pub fn App() -> impl IntoView {
                             <button
                                 type="button"
                                 class=move || if active_tab.get() == StudioTab::Studio { "tab-btn active" } else { "tab-btn" }
+                                aria-current=move || (active_tab.get() == StudioTab::Studio).then_some("page")
                                 on:click=move |_| active_tab.set(StudioTab::Studio)
                             >
                                 "Studio"
@@ -366,6 +369,7 @@ pub fn App() -> impl IntoView {
                             <button
                                 type="button"
                                 class=move || if active_tab.get() == StudioTab::PrBenchmark { "tab-btn active" } else { "tab-btn" }
+                                aria-current=move || (active_tab.get() == StudioTab::PrBenchmark).then_some("page")
                                 on:click=move |_| active_tab.set(StudioTab::PrBenchmark)
                             >
                                 "PR Benchmark"
@@ -376,7 +380,7 @@ pub fn App() -> impl IntoView {
             </header>
 
             // Main Studio Surface
-            <main class="studio-main">
+            <main id="main-content" class="studio-main" tabindex="-1">
                 {move || match active_tab.get() {
                     StudioTab::PrBenchmark => view! {
                         <FiveSigmaEvalView />
@@ -384,10 +388,11 @@ pub fn App() -> impl IntoView {
                     StudioTab::Studio => view! {
                         <>
                             // Recent Sessions Selector & New Comparison Toggle Bar
-                            <section class="panel session-bar">
+                            <section class="panel session-bar" aria-label="Saved comparison sessions">
                                 <div class="session-bar-left">
-                                    <span class="field-label" style="margin:0;white-space:nowrap;">"Recent Sessions"</span>
+                                    <label class="field-label" for="recent-sessions-select" style="margin:0;white-space:nowrap;">"Recent Sessions"</label>
                                     <select
+                                        id="recent-sessions-select"
                                         class="select mono session-select"
                                         prop:value=move || {
                                             active_session
@@ -439,6 +444,8 @@ pub fn App() -> impl IntoView {
                                     <button
                                         type="button"
                                         class=move || if show_intake.get() { "btn btn-sm" } else { "btn btn-primary btn-sm" }
+                                        aria-expanded=move || show_intake.get().to_string()
+                                        aria-controls="intake-panel"
                                         on:click=move |_| show_intake.update(|v| *v = !*v)
                                     >
                                         {move || if show_intake.get() { "Hide Intake" } else { "+ New Comparison" }}
@@ -447,7 +454,7 @@ pub fn App() -> impl IntoView {
                             </section>
 
                             {move || session_error.get().map(|err| view! {
-                                <div class="alert-banner err">{err}</div>
+                                <div class="alert-banner err" role="alert">{err}</div>
                             })}
 
                             // Collapsible Multimodal Intake
@@ -477,7 +484,7 @@ pub fn App() -> impl IntoView {
                                 };
 
                                 view! {
-                                    <section class="panel">
+                                    <section class="panel" aria-label="Active comparison progress">
                                         <div class="seismograph-wrap">
                                             <div class="seismograph-top">
                                                 <div class="seismograph-meta">
@@ -490,19 +497,25 @@ pub fn App() -> impl IntoView {
                                                 </div>
 
                                                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                                                    <span class=move || {
-                                                        match sse_status.get().as_str() {
-                                                            "Live" => "badge badge-emerald",
-                                                            "Reconnecting" => "badge badge-amber",
-                                                            "Disconnected" => "badge badge-red",
-                                                            _ => "badge badge-cyan",
+                                                    <span
+                                                        role="status"
+                                                        aria-live="polite"
+                                                        class=move || {
+                                                            match sse_status.get().as_str() {
+                                                                "Live" => "badge badge-emerald",
+                                                                "Reconnecting" => "badge badge-amber",
+                                                                "Disconnected" => "badge badge-red",
+                                                                _ => "badge badge-cyan",
+                                                            }
                                                         }
-                                                    }>
+                                                    >
                                                         {move || sse_status.get()}
                                                     </span>
                                                     <button
                                                         type="button"
                                                         class="btn btn-sm"
+                                                        aria-expanded=move || show_telemetry.get().to_string()
+                                                        aria-controls="agent-trace-drawer"
                                                         on:click=move |_| show_telemetry.update(|v| *v = !*v)
                                                     >
                                                         {move || format!(
@@ -521,7 +534,7 @@ pub fn App() -> impl IntoView {
                                                 </div>
                                             </div>
 
-                                            <div class="seismograph-stages">
+                                            <ol class="seismograph-stages" aria-label="Comparison stages">
                                                 {PIPELINE_STAGES.into_iter().enumerate().map(|(idx, (_st, label))| {
                                                     let cls = if is_failed && idx == current_rank {
                                                         "stage-step failed"
@@ -539,20 +552,41 @@ pub fn App() -> impl IntoView {
                                                     } else {
                                                         format!("{}", idx + 1)
                                                     };
+                                                    let status_sr = if is_failed && idx == current_rank {
+                                                        " (Stopped)"
+                                                    } else if is_done || idx < current_rank {
+                                                        " (Completed)"
+                                                    } else if idx == current_rank {
+                                                        " (In progress)"
+                                                    } else {
+                                                        " (Pending)"
+                                                    };
+                                                    let is_current = !is_done && idx == current_rank;
                                                     view! {
-                                                        <div class=cls>
-                                                            <span class="stage-index">{marker}</span>
+                                                        <li
+                                                            class=cls
+                                                            aria-current=is_current.then_some("step")
+                                                        >
+                                                            <span class="stage-index" aria-hidden="true">{marker}</span>
                                                             <span class="stage-name">{label}</span>
-                                                        </div>
+                                                            <span class="sr-only">{status_sr}</span>
+                                                        </li>
                                                     }
                                                 }).collect_view()}
-                                            </div>
+                                            </ol>
                                         </div>
 
                                         {move || show_telemetry.get().then(|| {
                                             let entries = telemetry_logs.get();
                                             view! {
-                                                <div class="telemetry-drawer">
+                                                <div
+                                                    id="agent-trace-drawer"
+                                                    class="telemetry-drawer"
+                                                    role="log"
+                                                    aria-live="polite"
+                                                    aria-relevant="additions"
+                                                    aria-label="Agent trace log"
+                                                >
                                                     {if entries.is_empty() {
                                                         view! {
                                                             <div style="color:var(--text-dim);">
@@ -586,7 +620,7 @@ pub fn App() -> impl IntoView {
                             })}
 
                             {move || loading_session.get().then(|| view! {
-                                <div class="alert-banner">
+                                <div class="alert-banner" role="status" aria-live="polite">
                                     "Loading comparison session..."
                                 </div>
                             })}

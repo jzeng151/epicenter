@@ -17,478 +17,6 @@ enum EvalFilter {
     MultimodalOnly,
 }
 
-const EVAL_STYLES: &str = r#"
-.epi-eval-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  color: #e2e8f0;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-.epi-eval-card {
-  background: #0f1624;
-  border: 1px solid #1e293b;
-  border-radius: 12px;
-  padding: 20px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
-}
-.epi-eval-head {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  border-bottom: 1px solid #1e293b;
-  padding-bottom: 14px;
-}
-.epi-eval-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  color: #f8fafc;
-}
-.epi-eval-sub {
-  font-size: 12.5px;
-  color: #94a3b8;
-  margin-top: 3px;
-  line-height: 1.45;
-}
-.epi-eval-btn {
-  background: #131d31;
-  color: #e2e8f0;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 8px 14px;
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
-  white-space: nowrap;
-}
-.epi-eval-btn:hover:not(:disabled) {
-  border-color: #38bdf8;
-  color: #38bdf8;
-  background: #16243d;
-}
-.epi-eval-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.epi-eval-btn-primary {
-  background: linear-gradient(135deg, #0284c7, #10b981);
-  border: 1px solid rgba(56, 189, 248, 0.55);
-  color: #04101a;
-  font-weight: 700;
-}
-.epi-eval-btn-primary:hover:not(:disabled) {
-  filter: brightness(1.08);
-  color: #04101a;
-}
-
-.epi-judge-box {
-  background: linear-gradient(145deg, rgba(14, 165, 233, 0.08), rgba(16, 185, 129, 0.05));
-  border: 1px solid rgba(56, 189, 248, 0.34);
-  border-radius: 12px;
-  padding: 20px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.epi-judge-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.epi-judge-input {
-  flex: 1 1 320px;
-  background: #080d18;
-  color: #f8fafc;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 10px 13px;
-  font-size: 13px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  outline: none;
-}
-.epi-judge-input:focus {
-  border-color: #38bdf8;
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
-}
-
-.epi-filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.epi-filter-pill {
-  background: #0b1220;
-  color: #94a3b8;
-  border: 1px solid #1e293b;
-  border-radius: 999px;
-  padding: 6px 13px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 140ms ease;
-}
-.epi-filter-pill:hover {
-  border-color: #38bdf8;
-  color: #e2e8f0;
-}
-.epi-filter-pill.active {
-  background: rgba(56, 189, 248, 0.14);
-  border-color: #38bdf8;
-  color: #38bdf8;
-}
-
-.epi-legend-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 18px;
-  align-items: center;
-  padding: 10px 14px;
-  background: #0b1220;
-  border: 1px solid #1e293b;
-  border-radius: 10px;
-  font-size: 12.5px;
-  color: #cbd5e1;
-}
-.epi-legend-entry {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-.epi-legend-desc {
-  color: #64748b;
-  font-size: 11.5px;
-}
-.epi-arm-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  display: inline-block;
-  flex-shrink: 0;
-}
-
-.epi-metric-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 14px;
-}
-.epi-metric-card {
-  background: #0b1220;
-  border: 1px solid #1e293b;
-  border-radius: 10px;
-  padding: 15px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.epi-metric-head {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.epi-metric-name {
-  font-size: 13px;
-  font-weight: 700;
-  color: #f8fafc;
-}
-.epi-metric-hint {
-  font-size: 11.5px;
-  color: #64748b;
-}
-.epi-bar-list {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-.epi-bar-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.epi-bar-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
-}
-.epi-bar-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #cbd5e1;
-}
-.epi-bar-val {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  font-weight: 700;
-}
-.epi-bar-track {
-  width: 100%;
-  height: 7px;
-  border-radius: 999px;
-  background: #162033;
-  overflow: hidden;
-}
-.epi-bar-fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width 220ms ease;
-}
-
-.epi-rubric-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 16px;
-}
-.epi-finding-card {
-  background: #0b1220;
-  border: 1px solid #1e293b;
-  border-left: 3px solid #38bdf8;
-  border-radius: 10px;
-  padding: 13px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  font-size: 12.5px;
-}
-.epi-finding-step {
-  color: #cbd5e1;
-  line-height: 1.5;
-}
-.epi-failure-pill {
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 9px;
-  padding: 10px 12px;
-  font-size: 12.5px;
-  color: #fecaca;
-  line-height: 1.45;
-}
-
-/* ── Human-Readable Per-PR Comparison Cards ────────────────────── */
-.epi-case-list {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.epi-case-card {
-  background: #0b1220;
-  border: 1px solid #1e293b;
-  border-radius: 11px;
-  overflow: hidden;
-}
-.epi-case-head {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 14px 16px;
-  background: #111a2c;
-  border-bottom: 1px solid #1e293b;
-}
-.epi-case-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: #f8fafc;
-  line-height: 1.35;
-}
-.epi-case-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-top: 6px;
-}
-.epi-arm-compare-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  padding: 14px 16px;
-}
-@media (max-width: 980px) {
-  .epi-arm-compare-grid {
-    grid-template-columns: 1fr;
-  }
-}
-.epi-arm-box {
-  background: #0f1624;
-  border: 1px solid #1e293b;
-  border-radius: 9px;
-  padding: 12px 13px;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-.epi-arm-box.winner {
-  border-color: rgba(16, 185, 129, 0.38);
-  background: linear-gradient(180deg, rgba(16, 185, 129, 0.06), #0f1624 55%);
-}
-.epi-arm-box-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-}
-.epi-arm-box-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 700;
-  color: #e2e8f0;
-}
-.epi-arm-subrow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  color: #94a3b8;
-}
-.epi-arm-stats-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid #1e293b;
-}
-.epi-arm-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.epi-arm-stat-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #64748b;
-}
-.epi-arm-stat-val {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  font-weight: 700;
-  color: #e2e8f0;
-}
-.epi-cause-box {
-  font-size: 12px;
-  color: #fecaca;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.28);
-  border-radius: 7px;
-  padding: 6px 9px;
-  line-height: 1.4;
-}
-.epi-note-text {
-  font-size: 11.5px;
-  color: #94a3b8;
-  line-height: 1.45;
-}
-.epi-note-details {
-  font-size: 11.5px;
-  color: #94a3b8;
-}
-.epi-note-details summary {
-  cursor: pointer;
-  color: #7dd3fc;
-  font-weight: 600;
-  user-select: none;
-}
-.epi-note-details p {
-  margin: 6px 0 0;
-  line-height: 1.45;
-  color: #cbd5e1;
-}
-
-.epi-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  border: 1px solid #1e293b;
-  background: #0b1220;
-  color: #cbd5e1;
-}
-.epi-badge-pass { color: #6ee7b7; border-color: rgba(16, 185, 129, 0.42); background: rgba(16, 185, 129, 0.14); }
-.epi-badge-fail { color: #fca5a5; border-color: rgba(239, 68, 68, 0.42); background: rgba(239, 68, 68, 0.14); }
-.epi-badge-cyan { color: #7dd3fc; border-color: rgba(56, 189, 248, 0.38); background: rgba(56, 189, 248, 0.10); }
-.epi-badge-amber { color: #fcd34d; border-color: rgba(245, 158, 11, 0.42); background: rgba(245, 158, 11, 0.12); }
-.epi-badge-violet { color: #c4b5fd; border-color: rgba(167, 139, 250, 0.42); background: rgba(167, 139, 250, 0.12); }
-
-.epi-err-banner {
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid rgba(239, 68, 68, 0.42);
-  border-radius: 9px;
-  padding: 10px 12px;
-  color: #fca5a5;
-  font-size: 12.5px;
-}
-.epi-sim-warning {
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(245, 158, 11, 0.18));
-  border: 1px solid rgba(245, 158, 11, 0.55);
-  border-left: 4px solid #ef4444;
-  border-radius: 10px;
-  padding: 12px 14px;
-  color: #fef3c7;
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.45;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.epi-live-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 11px;
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-weight: 700;
-  color: #6ee7b7;
-  background: rgba(16, 185, 129, 0.14);
-  border: 1px solid rgba(16, 185, 129, 0.45);
-}
-.epi-sha-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  color: #cbd5e1;
-  background: #080d18;
-  border: 1px solid #334155;
-  text-decoration: none;
-}
-.epi-sha-badge:hover {
-  border-color: #38bdf8;
-  color: #38bdf8;
-}
-.epi-empty-state {
-  padding: 32px 20px;
-  text-align: center;
-  color: #94a3b8;
-  font-size: 13px;
-  line-height: 1.5;
-  background: #0b1220;
-  border: 1px dashed #1e293b;
-  border-radius: 10px;
-}
-"#;
-
 fn is_simulated_label(label: &str) -> bool {
     let lower = label.to_ascii_lowercase();
     lower.contains("dry-run")
@@ -751,28 +279,31 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
     };
 
     view! {
-        <style>{EVAL_STYLES}</style>
         <div class="epi-eval-wrap">
             // 1. Evaluate Any Merged PR
-            <section class="epi-judge-box">
+            <section class="epi-judge-box" aria-labelledby="eval-judge-heading">
                 <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:flex-start; gap:10px;">
                     <div>
-                        <h2 class="epi-eval-title" style="color:#7dd3fc;">"Evaluate Any Merged PR"</h2>
+                        <h2 id="eval-judge-heading" class="epi-eval-title" style="color:#7dd3fc;">"Evaluate Any Merged PR"</h2>
                         <div class="epi-eval-sub">
                             "Paste any merged Python or TypeScript GitHub PR URL. Epicenter checks out the commit before the fix, withholds the PR's tests, and compares Single Prompt, Single Agent, and Epicenter head-to-head."
                         </div>
                     </div>
                     <span class="epi-live-pill">
-                        <span class="model-dot dot-emerald"></span>
+                        <span class="model-dot dot-emerald" aria-hidden="true"></span>
                         "Live Evaluation"
                     </span>
                 </div>
 
                 <form class="epi-judge-form" on:submit=on_run_live_judge>
+                    <label class="sr-only" for="live-pr-url-input">"Merged GitHub PR URL"</label>
                     <input
+                        id="live-pr-url-input"
                         type="url"
                         class="epi-judge-input"
                         placeholder="https://github.com/owner/repo/pull/123"
+                        aria-required="true"
+                        aria-invalid=move || judge_error.get().is_some().then_some("true")
                         prop:value=move || pr_url_input.get()
                         on:input=move |ev| pr_url_input.set(event_target_value(&ev))
                     />
@@ -790,14 +321,14 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                 </form>
 
                 {move || judge_error.get().map(|err| view! {
-                    <div class="epi-err-banner">{err}</div>
+                    <div class="epi-err-banner" role="alert">{err}</div>
                 })}
 
                 {move || live_judge_eval.get().map(|live_eval| {
                     let live_clone_for_promote = live_eval.clone();
                     let pr_count = live_eval.cases.len();
                     view! {
-                        <div class="epi-eval-card" style="background:#080d18; border-color:rgba(16,185,129,0.4);">
+                        <div class="epi-eval-card" role="region" aria-live="polite" aria-label="Live evaluation result" style="background:#080d18; border-color:rgba(16,185,129,0.4);">
                             <div class="epi-eval-head">
                                 <div>
                                     <h3 class="epi-eval-title" style="font-size:14.5px; color:#6ee7b7;">
@@ -830,10 +361,10 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
             </section>
 
             // 2. Benchmark Results Dashboard
-            <section class="epi-eval-card">
+            <section class="epi-eval-card" aria-labelledby="eval-results-heading">
                 <div class="epi-eval-head">
                     <div>
-                        <h2 class="epi-eval-title">"Benchmark Results"</h2>
+                        <h2 id="eval-results-heading" class="epi-eval-title">"Benchmark Results"</h2>
                         <div class="epi-eval-sub">
                             {move || match eval_data.get() {
                                 Some(ev) => {
@@ -860,13 +391,13 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                 </div>
 
                 {move || error_msg.get().map(|err| view! {
-                    <div class="epi-err-banner">{err}</div>
+                    <div class="epi-err-banner" role="alert">{err}</div>
                 })}
 
                 {move || {
                     if loading.get() && eval_data.get().is_none() {
                         return view! {
-                            <div class="epi-empty-state">"Loading latest benchmark results…"</div>
+                            <div class="epi-empty-state" role="status" aria-live="polite">"Loading latest benchmark results…"</div>
                         }.into_any();
                     }
 
@@ -901,7 +432,7 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                         {if simulated {
                             view! {
                                 <div class="epi-sim-warning" role="alert">
-                                    <span>"⚠"</span>
+                                    <span aria-hidden="true">"⚠"</span>
                                     <span>
                                         "Simulated / dry-run data — not live benchmark results. Paste a real merged PR above to run a live evaluation."
                                     </span>
@@ -911,10 +442,10 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                             view! {
                                 <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
                                     <span class="epi-live-pill">
-                                        <span class="model-dot dot-emerald"></span>
+                                        <span class="model-dot dot-emerald" aria-hidden="true"></span>
                                         "Live Host-Verified Run"
                                     </span>
-                                    <span style="font-size:12px;color:#94a3b8;">
+                                    <span style="font-size:12px;color:var(--text-muted);">
                                         "Scored by running withheld PR tests against the repository's pre-fix commit."
                                     </span>
                                 </div>
@@ -923,22 +454,42 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
 
                         // Split Filter Pills (only shown when multiple cases exist)
                         {(total_cnt > 1).then(|| view! {
-                            <div class="epi-filter-bar">
-                                <button type="button" class=all_cls on:click=move |_| active_filter.set(EvalFilter::All)>
+                            <div class="epi-filter-bar" role="group" aria-label="Filter benchmark results">
+                                <button
+                                    type="button"
+                                    class=all_cls
+                                    aria-pressed=(filter == EvalFilter::All).to_string()
+                                    on:click=move |_| active_filter.set(EvalFilter::All)
+                                >
                                     {format!("All ({total_cnt})")}
                                 </button>
                                 {(unseen_cnt > 0).then(|| view! {
-                                    <button type="button" class=unseen_cls on:click=move |_| active_filter.set(EvalFilter::LockedUnseen)>
+                                    <button
+                                        type="button"
+                                        class=unseen_cls
+                                        aria-pressed=(filter == EvalFilter::LockedUnseen).to_string()
+                                        on:click=move |_| active_filter.set(EvalFilter::LockedUnseen)
+                                    >
                                         {format!("Held-Out PRs ({unseen_cnt})")}
                                     </button>
                                 })}
                                 {(calib_cnt > 0).then(|| view! {
-                                    <button type="button" class=calib_cls on:click=move |_| active_filter.set(EvalFilter::Calibration)>
+                                    <button
+                                        type="button"
+                                        class=calib_cls
+                                        aria-pressed=(filter == EvalFilter::Calibration).to_string()
+                                        on:click=move |_| active_filter.set(EvalFilter::Calibration)
+                                    >
                                         {format!("Calibration ({calib_cnt})")}
                                     </button>
                                 })}
                                 {(media_cnt > 0).then(|| view! {
-                                    <button type="button" class=media_cls on:click=move |_| active_filter.set(EvalFilter::MultimodalOnly)>
+                                    <button
+                                        type="button"
+                                        class=media_cls
+                                        aria-pressed=(filter == EvalFilter::MultimodalOnly).to_string()
+                                        on:click=move |_| active_filter.set(EvalFilter::MultimodalOnly)
+                                    >
                                         {format!("With Media ({media_cnt})")}
                                     </button>
                                 })}
@@ -948,17 +499,17 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                         // Plain-English Approach Legend
                         <div class="epi-legend-strip">
                             <span class="epi-legend-entry">
-                                <span class="epi-arm-dot" style="background:#94a3b8;"></span>
+                                <span class="epi-arm-dot" style="background:#94a3b8;" aria-hidden="true"></span>
                                 <strong>"Single Prompt"</strong>
                                 <span class="epi-legend-desc">"One-shot model call"</span>
                             </span>
                             <span class="epi-legend-entry">
-                                <span class="epi-arm-dot" style="background:#f59e0b;"></span>
+                                <span class="epi-arm-dot" style="background:#f59e0b;" aria-hidden="true"></span>
                                 <strong>"Single Agent"</strong>
                                 <span class="epi-legend-desc">"Single coding agent"</span>
                             </span>
                             <span class="epi-legend-entry">
-                                <span class="epi-arm-dot" style="background:#10b981;"></span>
+                                <span class="epi-arm-dot" style="background:#10b981;" aria-hidden="true"></span>
                                 <strong style="color:#6ee7b7;">"Epicenter"</strong>
                                 <span class="epi-legend-desc">"Multi-approach comparison"</span>
                             </span>
@@ -1034,33 +585,33 @@ fn render_bar_metric_card(
         .map(|&arm| {
             let color = arm_color(arm);
             let val_pair = find_arm_metrics(scorecard, arm).and_then(extract);
-            let (pct_width, display_val, bar_color) = match val_pair {
+            let (pct_width, display_val, bar_color, text_color) = match val_pair {
                 Some((v, text)) => {
                     let w = v.clamp(0.0, 100.0);
-                    let bc = if color_by_risk {
+                    let (bc, tc) = if color_by_risk {
                         if v <= 25.0 {
-                            "#10b981"
+                            ("#10b981", "#6ee7b7")
                         } else if v <= 55.0 {
-                            "#f59e0b"
+                            ("#f59e0b", "#fcd34d")
                         } else {
-                            "#ef4444"
+                            ("#ef4444", "#fca5a5")
                         }
                     } else {
-                        color
+                        (color, color)
                     };
-                    (w, text, bc)
+                    (w, text, bc, tc)
                 }
-                None => (0.0, "—".to_string(), "#334155"),
+                None => (0.0, "—".to_string(), "#334155", "#8b9db5"),
             };
 
             view! {
                 <div class="epi-bar-item">
                     <div class="epi-bar-top">
                         <span class="epi-bar-label">
-                            <span class="epi-arm-dot" style=format!("background:{color};")></span>
+                            <span class="epi-arm-dot" style=format!("background:{color};") aria-hidden="true"></span>
                             {arm_short_label(arm)}
                         </span>
-                        <span class="epi-bar-val" style=format!("color:{bar_color};")>{display_val}</span>
+                        <span class="epi-bar-val" style=format!("color:{text_color};")>{display_val}</span>
                     </div>
                     <div class="epi-bar-track">
                         <div
@@ -1095,12 +646,12 @@ fn render_speedup_card(scorecard: &EvalScorecard) -> impl IntoView {
                 Some(v) if v > 1.0 => (format!("{v:+.1}% faster"), "#6ee7b7"),
                 Some(v) if v < -1.0 => (format!("{:.1}% slower", v.abs()), "#fca5a5"),
                 Some(v) => (format!("{v:+.1}%"), "#cbd5e1"),
-                None => ("Not measured".to_string(), "#64748b"),
+                None => ("Not measured".to_string(), "#8b9db5"),
             };
             view! {
                 <div class="epi-bar-top" style="padding:4px 0; border-bottom:1px solid rgba(30,41,59,0.55);">
                     <span class="epi-bar-label">
-                        <span class="epi-arm-dot" style=format!("background:{dot_color};")></span>
+                        <span class="epi-arm-dot" style=format!("background:{dot_color};") aria-hidden="true"></span>
                         {arm_short_label(arm)}
                     </span>
                     <span class="epi-bar-val" style=format!("color:{text_color};")>{text}</span>
@@ -1187,7 +738,7 @@ fn render_arm_outcome_box(arm: EvalArm, outcome: Option<&ArmOutcome>) -> impl In
             <div class="epi-arm-box">
                 <div class="epi-arm-box-head">
                     <span class="epi-arm-box-name">
-                        <span class="epi-arm-dot" style=format!("background:{dot_color};")></span>
+                        <span class="epi-arm-dot" style=format!("background:{dot_color};") aria-hidden="true"></span>
                         {arm_name}
                     </span>
                     <span class="epi-badge">"Not Run"</span>
@@ -1253,7 +804,7 @@ fn render_arm_outcome_box(arm: EvalArm, outcome: Option<&ArmOutcome>) -> impl In
         <div class=box_cls>
             <div class="epi-arm-box-head">
                 <span class="epi-arm-box-name">
-                    <span class="epi-arm-dot" style=format!("background:{dot_color};")></span>
+                    <span class="epi-arm-dot" style=format!("background:{dot_color};") aria-hidden="true"></span>
                     {arm_name}
                 </span>
                 <span class=pass_cls>{pass_text}</span>
@@ -1262,7 +813,7 @@ fn render_arm_outcome_box(arm: EvalArm, outcome: Option<&ArmOutcome>) -> impl In
             <div class="epi-arm-subrow">
                 <span class=reg_cls>{reg_text}</span>
                 {duration_opt.map(|d| view! {
-                    <span class="mono" style="font-size:11px; color:#64748b;">{format!("Runtime: {d}")}</span>
+                    <span class="mono" style="font-size:11px; color:var(--text-dim);">{format!("Runtime: {d}")}</span>
                 })}
             </div>
 
@@ -1378,9 +929,10 @@ fn render_case_cards(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl I
                                         href=href
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        style="color:#38bdf8; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; text-decoration:none; font-weight:600;"
+                                        style="color:#38bdf8; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; text-decoration:underline; text-underline-offset:2px; font-weight:600;"
                                     >
                                         {label}
+                                        <span class="sr-only">" (opens in a new tab)"</span>
                                     </a>
                                 })}
                                 {issue_link.map(|(href, label)| view! {
@@ -1388,9 +940,10 @@ fn render_case_cards(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl I
                                         href=href
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        style="color:#7dd3fc; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; text-decoration:none;"
+                                        style="color:#7dd3fc; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; text-decoration:underline; text-underline-offset:2px;"
                                     >
                                         {label}
+                                        <span class="sr-only">" (opens in a new tab)"</span>
                                     </a>
                                 })}
                                 {commit_badge.map(|(href, short_sha, full_sha)| view! {
@@ -1402,6 +955,7 @@ fn render_case_cards(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl I
                                         title=format!("Pre-fix commit {full_sha}")
                                     >
                                         {format!("@{short_sha}")}
+                                        <span class="sr-only">{format!(" pre-fix commit {full_sha} (opens in a new tab)")}</span>
                                     </a>
                                 })}
                                 <span class=sp_cls>{sp_lbl}</span>

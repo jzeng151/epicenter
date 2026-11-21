@@ -11,307 +11,6 @@ const RING0_RADIUS: f32 = 56.0;
 const RING1_RADIUS: f32 = 160.0;
 const RING2_RADIUS: f32 = 280.0;
 
-const RIPPLE_STYLES: &str = r#"
-.epi-ripple-card {
-  background: #0f1624;
-  border: 1px solid #1e293b;
-  border-radius: 12px;
-  padding: 20px 22px;
-  color: #e2e8f0;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
-}
-.epi-ripple-header {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  border-bottom: 1px solid #1e293b;
-  padding-bottom: 14px;
-}
-.epi-ripple-title-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.epi-ripple-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  color: #f8fafc;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.epi-ripple-subtitle {
-  font-size: 12.5px;
-  color: #94a3b8;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-.epi-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  border: 1px solid #1e293b;
-  background: #0b1220;
-  color: #cbd5e1;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-.epi-pill-cyan { color: #38bdf8; border-color: rgba(56, 189, 248, 0.35); background: rgba(56, 189, 248, 0.10); }
-.epi-pill-violet { color: #a78bfa; border-color: rgba(167, 139, 250, 0.35); background: rgba(167, 139, 250, 0.10); }
-.epi-pill-emerald { color: #10b981; border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.10); }
-.epi-pill-amber { color: #f59e0b; border-color: rgba(245, 158, 11, 0.40); background: rgba(245, 158, 11, 0.12); }
-.epi-pill-red { color: #ef4444; border-color: rgba(239, 68, 68, 0.40); background: rgba(239, 68, 68, 0.12); }
-
-.epi-zoom-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.epi-zoom-btn {
-  background: #131d31;
-  color: #e2e8f0;
-  border: 1px solid #1e293b;
-  border-radius: 7px;
-  padding: 4px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
-}
-.epi-zoom-btn:hover {
-  border-color: #38bdf8;
-  color: #38bdf8;
-  background: #16233b;
-}
-.epi-zoom-readout {
-  font-size: 11px;
-  color: #94a3b8;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  min-width: 42px;
-  text-align: center;
-}
-
-.epi-ripple-metrics-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.epi-ripple-stage {
-  position: relative;
-  background: radial-gradient(circle at 50% 50%, #101a2e 0%, #090e19 65%, #060a12 100%);
-  border: 1px solid #1e293b;
-  border-radius: 12px;
-  overflow: hidden;
-  user-select: none;
-}
-.epi-ripple-svg {
-  width: 100%;
-  height: auto;
-  max-height: 540px;
-  display: block;
-}
-.epi-ripple-hint {
-  position: absolute;
-  bottom: 10px;
-  right: 12px;
-  font-size: 11px;
-  color: #64748b;
-  background: rgba(8, 12, 20, 0.82);
-  border: 1px solid #1e293b;
-  padding: 3px 8px;
-  border-radius: 6px;
-  pointer-events: none;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
-@keyframes epi-darkzone-pulse {
-  0% { transform: scale(1); opacity: 0.9; }
-  70% { transform: scale(1.65); opacity: 0.0; }
-  100% { transform: scale(1.65); opacity: 0.0; }
-}
-@keyframes epi-epicenter-breathe {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1.0; }
-}
-.epi-darkzone-pulse-ring {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: epi-darkzone-pulse 2.1s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
-}
-.epi-epicenter-glow-ring {
-  animation: epi-epicenter-breathe 2.6s ease-in-out infinite;
-}
-.epi-node-group {
-  cursor: pointer;
-}
-
-.epi-ripple-legend {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px;
-  font-size: 11px;
-  color: #94a3b8;
-  padding: 2px 4px;
-}
-.epi-legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.epi-legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  display: inline-block;
-}
-
-.epi-bandaid-alert {
-  background: rgba(245, 158, 11, 0.10);
-  border: 1px solid rgba(245, 158, 11, 0.45);
-  border-left: 4px solid #f59e0b;
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-size: 12px;
-  color: #fde68a;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.epi-bandaid-title {
-  font-weight: 700;
-  color: #f59e0b;
-  text-transform: uppercase;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-}
-
-.epi-inspector-card {
-  background: #0b1220;
-  border: 1px solid #1e293b;
-  border-radius: 12px;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.epi-inspector-head {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 10px;
-}
-.epi-inspector-symbol {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 14px;
-  font-weight: 700;
-  color: #38bdf8;
-  word-break: break-all;
-}
-.epi-inspector-loc {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-  color: #94a3b8;
-  margin-top: 2px;
-}
-.epi-cov-bar-track {
-  width: 100%;
-  height: 7px;
-  background: #1e293b;
-  border-radius: 999px;
-  overflow: hidden;
-}
-.epi-cov-bar-fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width 200ms ease;
-}
-.epi-neighbor-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: #94a3b8;
-}
-.epi-neighbor-chip {
-  background: #131d31;
-  border: 1px solid #1e293b;
-  border-radius: 6px;
-  padding: 2px 8px;
-  color: #e2e8f0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-  cursor: pointer;
-}
-.epi-neighbor-chip:hover {
-  border-color: #38bdf8;
-  color: #38bdf8;
-}
-
-.epi-hazard-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.epi-hazard-item {
-  background: #0f1624;
-  border: 1px solid #1e293b;
-  border-radius: 9px;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.epi-hazard-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-.epi-hazard-expl {
-  font-size: 12px;
-  color: #cbd5e1;
-  line-height: 1.45;
-}
-.epi-hazard-mit {
-  font-size: 11px;
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.08);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  border-radius: 6px;
-  padding: 5px 8px;
-  line-height: 1.4;
-}
-.epi-empty-radar {
-  padding: 36px 20px;
-  text-align: center;
-  color: #94a3b8;
-  font-size: 13px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-"#;
-
 fn select_active_candidate<'a>(
     session: &'a TournamentSession,
     selected_id: Option<&str>,
@@ -504,6 +203,7 @@ pub fn BlastRadiusRippleMap(
     let drag_origin = RwSignal::new((0_i32, 0_i32, 0.0_f64, 0.0_f64));
 
     let hovered_node_id = RwSignal::new(Option::<String>::None);
+    let focused_node_id = RwSignal::new(Option::<String>::None);
     let selected_node_id = RwSignal::new(Option::<String>::None);
 
     let on_zoom_in = move |_| {
@@ -511,6 +211,18 @@ pub fn BlastRadiusRippleMap(
     };
     let on_zoom_out = move |_| {
         zoom.update(|z| *z = (*z / 1.18).clamp(0.45, 3.2));
+    };
+    let on_pan_left = move |_| {
+        pan_x.update(|x| *x = (*x + 48.0).clamp(-420.0, 420.0));
+    };
+    let on_pan_right = move |_| {
+        pan_x.update(|x| *x = (*x - 48.0).clamp(-420.0, 420.0));
+    };
+    let on_pan_up = move |_| {
+        pan_y.update(|y| *y = (*y + 48.0).clamp(-420.0, 420.0));
+    };
+    let on_pan_down = move |_| {
+        pan_y.update(|y| *y = (*y - 48.0).clamp(-420.0, 420.0));
     };
     let on_reset_view = move |_| {
         zoom.set(1.0);
@@ -550,15 +262,14 @@ pub fn BlastRadiusRippleMap(
     };
 
     view! {
-        <style>{RIPPLE_STYLES}</style>
-        <section class="epi-ripple-card">
+        <section class="epi-ripple-card" aria-label="Code Impact Map">
             {move || {
                 let Some(sess) = session.get() else {
                     return view! {
                         <div class="epi-ripple-header">
                             <div class="epi-ripple-title-group">
                                 <h2 class="epi-ripple-title">
-                                    <span class="model-dot dot-cyan"></span>
+                                    <span class="model-dot dot-cyan" aria-hidden="true"></span>
                                     "Code Impact Map"
                                 </h2>
                                 <div class="epi-ripple-subtitle">"Modified code, direct callers, indirect entrypoints, and test coverage."</div>
@@ -566,7 +277,7 @@ pub fn BlastRadiusRippleMap(
                         </div>
                         <div class="epi-ripple-stage">
                             <div class="epi-empty-radar">
-                                <svg viewBox="-120 -120 240 240" width="144" height="144">
+                                <svg viewBox="-120 -120 240 240" width="144" height="144" aria-hidden="true" focusable="false">
                                     <circle cx="0" cy="0" r="102" fill="none" stroke="#1e293b" stroke-dasharray="5 5" />
                                     <circle cx="0" cy="0" r="62" fill="none" stroke="#1e293b" stroke-dasharray="4 4" />
                                     <circle cx="0" cy="0" r="24" fill="rgba(56,189,248,0.12)" stroke="#38bdf8" stroke-dasharray="3 3" />
@@ -639,9 +350,14 @@ pub fn BlastRadiusRippleMap(
                     pan_y,
                     dragging,
                     hovered_node_id,
+                    focused_node_id,
                     selected_node_id,
                     on_zoom_in,
                     on_zoom_out,
+                    on_pan_left,
+                    on_pan_up,
+                    on_pan_down,
+                    on_pan_right,
                     on_reset_view,
                     on_wheel,
                     on_mouse_down,
@@ -665,9 +381,14 @@ fn render_blast_report_view(
     pan_y: RwSignal<f64>,
     dragging: RwSignal<bool>,
     hovered_node_id: RwSignal<Option<String>>,
+    focused_node_id: RwSignal<Option<String>>,
     selected_node_id: RwSignal<Option<String>>,
     on_zoom_in: impl Fn(web_sys::MouseEvent) + 'static,
     on_zoom_out: impl Fn(web_sys::MouseEvent) + 'static,
+    on_pan_left: impl Fn(web_sys::MouseEvent) + 'static,
+    on_pan_up: impl Fn(web_sys::MouseEvent) + 'static,
+    on_pan_down: impl Fn(web_sys::MouseEvent) + 'static,
+    on_pan_right: impl Fn(web_sys::MouseEvent) + 'static,
     on_reset_view: impl Fn(web_sys::MouseEvent) + 'static,
     on_wheel: impl Fn(web_sys::WheelEvent) + 'static,
     on_mouse_down: impl Fn(web_sys::MouseEvent) + 'static,
@@ -737,11 +458,16 @@ fn render_blast_report_view(
     let hazards_for_inspector = report.semantic_hazards.clone();
     let bandaid_warning = report.bandaid_debt_warning.clone();
 
+    let map_aria_label = format!(
+        "Interactive code impact map for {strategy_title}: {total_nodes} affected symbols, {dark_zones} untested callers, {hazard_count} code hazards"
+    );
+    let map_svg_title = map_aria_label.clone();
+
     view! {
         <div class="epi-ripple-header">
             <div class="epi-ripple-title-group">
                 <h2 class="epi-ripple-title">
-                    <span class="model-dot dot-cyan"></span>
+                    <span class="model-dot dot-cyan" aria-hidden="true"></span>
                     "Code Impact Map"
                 </h2>
                 <div class="epi-ripple-subtitle">
@@ -754,13 +480,17 @@ fn render_blast_report_view(
                     })}
                 </div>
             </div>
-            <div class="epi-zoom-controls">
-                <button type="button" class="epi-zoom-btn" on:click=on_zoom_out title="Zoom Out">"-"</button>
-                <span class="epi-zoom-readout">
+            <div class="epi-zoom-controls" role="group" aria-label="Map pan and zoom controls">
+                <button type="button" class="epi-zoom-btn" on:click=on_pan_left aria-label="Pan map left" title="Pan Left">"←"</button>
+                <button type="button" class="epi-zoom-btn" on:click=on_pan_up aria-label="Pan map up" title="Pan Up">"↑"</button>
+                <button type="button" class="epi-zoom-btn" on:click=on_pan_down aria-label="Pan map down" title="Pan Down">"↓"</button>
+                <button type="button" class="epi-zoom-btn" on:click=on_pan_right aria-label="Pan map right" title="Pan Right">"→"</button>
+                <button type="button" class="epi-zoom-btn" on:click=on_zoom_out aria-label="Zoom out" title="Zoom Out">"-"</button>
+                <span class="epi-zoom-readout" aria-live="polite">
                     {move || format!("{}%", (zoom.get() * 100.0).round() as i32)}
                 </span>
-                <button type="button" class="epi-zoom-btn" on:click=on_zoom_in title="Zoom In">"+"</button>
-                <button type="button" class="epi-zoom-btn" on:click=on_reset_view title="Reset Zoom & Pan">"Reset"</button>
+                <button type="button" class="epi-zoom-btn" on:click=on_zoom_in aria-label="Zoom in" title="Zoom In">"+"</button>
+                <button type="button" class="epi-zoom-btn" on:click=on_reset_view aria-label="Reset zoom and pan" title="Reset Zoom & Pan">"Reset"</button>
             </div>
         </div>
 
@@ -777,7 +507,7 @@ fn render_blast_report_view(
         </div>
 
         {bandaid_warning.map(|warning| view! {
-            <div class="epi-bandaid-alert">
+            <div class="epi-bandaid-alert" role="note">
                 <span class="epi-bandaid-title">"Shallow Fix Warning"</span>
                 <span>{warning}</span>
             </div>
@@ -786,6 +516,8 @@ fn render_blast_report_view(
         <div class="epi-ripple-stage">
             <svg
                 class="epi-ripple-svg"
+                role="group"
+                aria-label=map_aria_label
                 viewBox="-360 -360 720 720"
                 style=move || {
                     if dragging.get() {
@@ -800,6 +532,7 @@ fn render_blast_report_view(
                 on:mouseup=on_mouse_up
                 on:mouseleave=on_mouse_up
             >
+                <title>{map_svg_title}</title>
                 <defs>
                     <radialGradient id="epi-epicenter-radial" cx="50%" cy="50%" r="50%">
                         <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.28" />
@@ -851,13 +584,13 @@ fn render_blast_report_view(
                     <circle cx="0" cy="0" r=RING0_RADIUS.to_string() fill="url(#epi-epicenter-radial)" stroke="#818cf8" stroke-opacity="0.75" stroke-width="1.6" stroke-dasharray="4 4" />
 
                     // Ring Labels
-                    <text x="0" y="-288" text-anchor="middle" fill="#64748b" font-size="10" font-weight="700" letter-spacing="1.4">
+                    <text x="0" y="-288" text-anchor="middle" fill="#8b9db5" font-size="10" font-weight="700" letter-spacing="1.4">
                         "INDIRECT ENTRYPOINTS"
                     </text>
-                    <text x="0" y="-168" text-anchor="middle" fill="#38bdf8" fill-opacity="0.75" font-size="10" font-weight="700" letter-spacing="1.2">
+                    <text x="0" y="-168" text-anchor="middle" fill="#7dd3fc" font-size="10" font-weight="700" letter-spacing="1.2">
                         "DIRECT CALLERS"
                     </text>
-                    <text x="0" y="-64" text-anchor="middle" fill="#a78bfa" font-size="9.5" font-weight="700" letter-spacing="1.1">
+                    <text x="0" y="-64" text-anchor="middle" fill="#c4b5fd" font-size="9.5" font-weight="700" letter-spacing="1.1">
                         "MODIFIED CODE"
                     </text>
 
@@ -865,6 +598,7 @@ fn render_blast_report_view(
                     {move || {
                         let focus_id = hovered_node_id
                             .get()
+                            .or_else(|| focused_node_id.get())
                             .or_else(|| selected_node_id.get());
                         let (hi_edges, _) = match focus_id.as_deref() {
                             Some(fid) => compute_highlighted_chain(&edges_for_svg, fid),
@@ -915,6 +649,7 @@ fn render_blast_report_view(
                     {move || {
                         let focus_id = hovered_node_id
                             .get()
+                            .or_else(|| focused_node_id.get())
                             .or_else(|| selected_node_id.get());
                         let (_, hi_nodes) = match focus_id.as_deref() {
                             Some(fid) => compute_highlighted_chain(&report.edges, fid),
@@ -927,14 +662,18 @@ fn render_blast_report_view(
                             .iter()
                             .map(|node| {
                                 let node_id_click = node.id.clone();
+                                let node_id_key = node.id.clone();
                                 let node_id_enter = node.id.clone();
                                 let node_id_leave = node.id.clone();
+                                let node_id_focus = node.id.clone();
+                                let node_id_blur = node.id.clone();
 
                                 let x = node.radial_x;
                                 let y = node.radial_y;
                                 let r = node_visual_radius(node);
                                 let is_selected = active_sel.as_deref() == Some(node.id.as_str());
                                 let is_hovered = hovered_node_id.get().as_deref() == Some(node.id.as_str());
+                                let is_focused = focused_node_id.get().as_deref() == Some(node.id.as_str());
                                 let is_in_chain = !has_focus || hi_nodes.contains(&node.id);
                                 let node_opacity = if is_in_chain { "1.0" } else { "0.35" };
 
@@ -963,12 +702,21 @@ fn render_blast_report_view(
                                     }
                                 };
 
+                                let node_aria = format!(
+                                    "{} ({}, {}, {}{})",
+                                    node.symbol,
+                                    ring_label(node.ring),
+                                    node.file_path,
+                                    cov_badge,
+                                    if has_hazard { ", has code hazard" } else { "" }
+                                );
+
                                 let badge_fill = if node.is_untested_dark_zone {
-                                    "#ef4444"
+                                    "#fca5a5"
                                 } else if node.ring == ImpactRing::Ring0 {
-                                    "#a78bfa"
+                                    "#c4b5fd"
                                 } else {
-                                    "#10b981"
+                                    "#6ee7b7"
                                 };
 
                                 let label_y = y + r + 13.0;
@@ -977,10 +725,21 @@ fn render_blast_report_view(
                                 view! {
                                     <g
                                         class="epi-node-group"
+                                        role="button"
+                                        tabindex="0"
+                                        aria-label=node_aria
+                                        aria-pressed=is_selected.to_string()
                                         opacity=node_opacity
                                         on:click=move |ev: web_sys::MouseEvent| {
                                             ev.stop_propagation();
                                             selected_node_id.set(Some(node_id_click.clone()));
+                                        }
+                                        on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                            let key = ev.key();
+                                            if key == "Enter" || key == " " {
+                                                ev.prevent_default();
+                                                selected_node_id.set(Some(node_id_key.clone()));
+                                            }
                                         }
                                         on:mouseenter=move |_| {
                                             hovered_node_id.set(Some(node_id_enter.clone()));
@@ -990,21 +749,41 @@ fn render_blast_report_view(
                                                 hovered_node_id.set(None);
                                             }
                                         }
+                                        on:focus=move |_| {
+                                            focused_node_id.set(Some(node_id_focus.clone()));
+                                        }
+                                        on:blur=move |_| {
+                                            if focused_node_id.get_untracked().as_deref() == Some(node_id_blur.as_str()) {
+                                                focused_node_id.set(None);
+                                            }
+                                        }
                                     >
-                                        // Pulsing dark-zone warning halo
+                                        // Persistent + brief pulse warning halo for untested callers
                                         {node.is_untested_dark_zone.then(|| view! {
-                                            <circle
-                                                class="epi-darkzone-pulse-ring"
-                                                cx=format!("{x:.1}")
-                                                cy=format!("{y:.1}")
-                                                r=format!("{:.1}", r + 5.0)
-                                                fill="none"
-                                                stroke="#f59e0b"
-                                                stroke-width="2.2"
-                                            />
+                                            <>
+                                                <circle
+                                                    cx=format!("{x:.1}")
+                                                    cy=format!("{y:.1}")
+                                                    r=format!("{:.1}", r + 4.5)
+                                                    fill="none"
+                                                    stroke="#f59e0b"
+                                                    stroke-width="1.6"
+                                                    stroke-dasharray="3 3"
+                                                    opacity="0.85"
+                                                />
+                                                <circle
+                                                    class="epi-darkzone-pulse-ring"
+                                                    cx=format!("{x:.1}")
+                                                    cy=format!("{y:.1}")
+                                                    r=format!("{:.1}", r + 5.0)
+                                                    fill="none"
+                                                    stroke="#f59e0b"
+                                                    stroke-width="2.2"
+                                                />
+                                            </>
                                         })}
 
-                                        // Ring 0 breathing halo
+                                        // Ring 0 halo
                                         {(node.ring == ImpactRing::Ring0).then(|| view! {
                                             <circle
                                                 class="epi-epicenter-glow-ring"
@@ -1012,21 +791,21 @@ fn render_blast_report_view(
                                                 cy=format!("{y:.1}")
                                                 r=format!("{:.1}", r + 6.0)
                                                 fill="none"
-                                                stroke="#a78bfa"
+                                                stroke="#c4b5fd"
                                                 stroke-width="1.8"
                                                 stroke-dasharray="3 3"
                                             />
                                         })}
 
-                                        // Selection / Hover ring
-                                        {(is_selected || is_hovered).then(|| view! {
+                                        // Selection / Hover / Keyboard Focus ring
+                                        {(is_selected || is_hovered || is_focused).then(|| view! {
                                             <circle
                                                 cx=format!("{x:.1}")
                                                 cy=format!("{y:.1}")
-                                                r=format!("{:.1}", r + 4.0)
+                                                r=format!("{:.1}", r + if is_focused { 6.5 } else { 4.0 })
                                                 fill="none"
-                                                stroke="#f8fafc"
-                                                stroke-width=if is_selected { "2.2" } else { "1.4" }
+                                                stroke=if is_focused { "#7dd3fc" } else { "#f8fafc" }
+                                                stroke-width=if is_focused { "2.8" } else if is_selected { "2.2" } else { "1.4" }
                                             />
                                         })}
 
@@ -1109,24 +888,24 @@ fn render_blast_report_view(
                     }}
                 </g>
             </svg>
-            <div class="epi-ripple-hint">"Scroll to zoom · Drag to pan · Click node to inspect"</div>
+            <div class="epi-ripple-hint">"Drag or use pan/zoom buttons · Click or Tab + Enter on a node to inspect"</div>
         </div>
 
         <div class="epi-ripple-legend">
             <span class="epi-legend-item">
-                <span class="epi-legend-dot" style="background: #38bdf8; box-shadow: 0 0 8px #a78bfa;"></span>
+                <span class="epi-legend-dot" aria-hidden="true" style="background: #38bdf8; box-shadow: 0 0 8px #a78bfa;"></span>
                 "Modified Code"
             </span>
             <span class="epi-legend-item">
-                <span class="epi-legend-dot" style="background: #10b981; box-shadow: 0 0 8px #10b981;"></span>
+                <span class="epi-legend-dot" aria-hidden="true" style="background: #10b981; box-shadow: 0 0 8px #10b981;"></span>
                 "Covered Caller"
             </span>
             <span class="epi-legend-item">
-                <span class="epi-legend-dot" style="background: #ef4444; box-shadow: 0 0 8px #f59e0b;"></span>
+                <span class="epi-legend-dot" aria-hidden="true" style="background: #ef4444; box-shadow: 0 0 8px #f59e0b;"></span>
                 "Untested Caller (0%)"
             </span>
             <span class="epi-legend-item">
-                <span class="epi-legend-dot" style="background: #ef4444; border: 1px solid #fff;"></span>
+                <span class="epi-legend-dot" aria-hidden="true" style="background: #dc2626; border: 1px solid #fff;"></span>
                 "! Code Hazard"
             </span>
         </div>
@@ -1136,25 +915,26 @@ fn render_blast_report_view(
             let active_id = selected_node_id
                 .get()
                 .filter(|id| node_map.contains_key(id))
+                .or_else(|| focused_node_id.get().filter(|id| node_map.contains_key(id)))
                 .or_else(|| hovered_node_id.get().filter(|id| node_map.contains_key(id)))
                 .or_else(|| default_inspector_id.clone());
 
             let inspected = active_id.as_deref().and_then(|id| node_map.get(id)).cloned();
 
             view! {
-                <div class="epi-inspector-card">
+                <div class="epi-inspector-card" role="region" aria-live="polite" aria-label="Selected symbol inspector">
                     {match inspected {
                         Some(node) => {
                             let cov_pct = node.test_coverage_pct;
                             let cov_width = cov_pct.unwrap_or(0.0).clamp(0.0, 100.0);
                             let cov_color = if node.is_untested_dark_zone {
-                                "#ef4444"
+                                "#fca5a5"
                             } else if cov_pct.map(|p| p >= 75.0).unwrap_or(false) {
-                                "#10b981"
+                                "#6ee7b7"
                             } else if cov_pct.is_some() {
-                                "#f59e0b"
+                                "#fcd34d"
                             } else {
-                                "#64748b"
+                                "#8b9db5"
                             };
                             let cov_text = if node.is_untested_dark_zone {
                                 "0% (Untested)".to_string()
@@ -1265,12 +1045,12 @@ fn render_blast_report_view(
                                 })}
 
                                 <div class="epi-hazard-list">
-                                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8;">
+                                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#a8b7cc;">
                                         {format!("Code Hazards ({} on this symbol)", matching_hazards.len())}
                                     </div>
                                     {if matching_hazards.is_empty() {
                                         view! {
-                                            <div style="font-size:12px; color:#64748b;">
+                                            <div style="font-size:12px; color:#8b9db5;">
                                                 "No hazards flagged on this symbol."
                                             </div>
                                         }.into_any()
@@ -1279,7 +1059,7 @@ fn render_blast_report_view(
                                     }}
 
                                     {(!other_hazards.is_empty()).then(|| view! {
-                                        <div style="margin-top:6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8;">
+                                        <div style="margin-top:6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#a8b7cc;">
                                             {format!("Other Hazards ({})", other_hazards.len())}
                                         </div>
                                         {other_hazards.into_iter().map(render_hazard_item).collect_view()}
