@@ -641,9 +641,19 @@ See docs at https://realhost.io/docs/guide (not media!) and flamegraph https://c
             "curated dataset failed static integrity verification: {:?}",
             report.failures
         );
+        assert!(
+            report.multimodal_cases >= 4,
+            "curated dataset should include at least 4 verified multimodal cases, got {}",
+            report.multimodal_cases
+        );
 
         let mut seen_ids = HashSet::new();
         for case in &cases {
+            assert!(
+                case.repo_url.starts_with("https://github.com/jzeng151/"),
+                "all 20 cases must come exclusively from jzeng151-owned public repos, got {}",
+                case.repo_url
+            );
             assert!(seen_ids.insert(case.id.clone()), "duplicate case id {}", case.id);
             let parsed_gt = parse_unified_diff(&case.ground_truth_test_patch);
             assert!(!parsed_gt.is_empty());
@@ -651,6 +661,19 @@ See docs at https://realhost.io/docs/guide (not media!) and flamegraph https://c
                 assert!(is_test_file_path(&file.path));
             }
         }
+    }
+
+    #[test]
+    fn is_test_file_path_distinguishes_runnable_tests_from_spec_docs_and_golden_fixtures() {
+        assert!(is_test_file_path("lyre/tests/formatter/test_core.py"));
+        assert!(is_test_file_path("test/field-memory.test.ts"));
+        assert!(is_test_file_path("web/src/components/sourceLink.test.ts"));
+        assert!(is_test_file_path("packages/engine/src/acceptance.test.ts"));
+
+        assert!(!is_test_file_path("docs/specs/speech-formatter/spec (#3-#9).md"));
+        assert!(!is_test_file_path("specs/F-201-permit-plan-generator.md"));
+        assert!(!is_test_file_path("lyre/tests/golden/cases/33-titled-links-and-inline-math.md"));
+        assert!(!is_test_file_path("lyre/tests/golden/expected/33-titled-links-and-inline-math.plain.txt"));
     }
 
     #[test]

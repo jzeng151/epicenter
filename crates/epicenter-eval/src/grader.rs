@@ -640,19 +640,19 @@ async fn ensure_python_venv(
             }
         }
 
-        // Install pytest + coverage (fallback to pytest alone if coverage fails).
+        // Install pytest + coverage + pyyaml (fallback to pytest + pyyaml, then pytest alone).
         let mut install_pytest = Command::new("uv");
         install_pytest
             .args(["pip", "install", "--python"])
             .arg(&venv_python)
-            .args(["pytest", "coverage"]);
+            .args(["pytest", "coverage", "pyyaml"]);
         let pytest_res = run_cmd_with_timeout(install_pytest, setup_timeout_secs).await?;
         if !pytest_res.success {
             let mut install_pytest_only = Command::new("uv");
             install_pytest_only
                 .args(["pip", "install", "--python"])
                 .arg(&venv_python)
-                .arg("pytest");
+                .args(["pytest", "pyyaml"]);
             let res2 = run_cmd_with_timeout(install_pytest_only, setup_timeout_secs).await?;
             if !res2.success {
                 return Err(anyhow!(

@@ -11,20 +11,11 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-/// Default external Python & TypeScript open-source repositories targeted by the 5-Sigma harvester.
+/// Default first-party (`jzeng151`-owned) Python & TypeScript repositories targeted by the 5-Sigma harvester.
 pub const DEFAULT_TARGET_REPOS: &[&str] = &[
-    "pallets/click",
-    "pallets/flask",
-    "pallets/werkzeug",
-    "encode/httpx",
-    "psf/requests",
-    "urllib3/urllib3",
-    "pydantic/pydantic",
-    "tiangolo/fastapi",
-    "colinhacks/zod",
-    "honojs/hono",
-    "Textualize/rich",
-    "pytest-dev/pytest",
+    "jzeng151/hermes-lyre",
+    "jzeng151/soilsense",
+    "jzeng151/pop-engine",
 ];
 
 /// Configuration for batch harvesting merged bug-fix PRs from GitHub.
@@ -42,7 +33,7 @@ impl Default for HarvestConfig {
     fn default() -> Self {
         Self {
             repos: DEFAULT_TARGET_REPOS.iter().map(|s| s.to_string()).collect(),
-            max_prs_per_repo: 3,
+            max_prs_per_repo: 10,
             max_total_cases: 20,
             calibration_count: 5,
             prefer_multimodal: true,
@@ -101,10 +92,21 @@ pub fn is_production_code_path(path: &str) -> bool {
         || lower.ends_with(".go")
 }
 
-/// Returns `true` if `path` is a test or spec file that belongs in the hidden ground-truth test patch.
+/// Returns `true` if `path` is an executable test or spec code file that belongs in the hidden ground-truth test patch.
 pub fn is_test_file_path(path: &str) -> bool {
     let norm = normalize_rel_path(path).to_ascii_lowercase();
     if norm.is_empty() || norm == "/dev/null" {
+        return false;
+    }
+
+    // Never classify documentation, markdown specs, text golden snapshots, or static assets as runnable tests.
+    if norm.starts_with("docs/") {
+        return false;
+    }
+    const CODE_EXTS: &[&str] = &[
+        ".py", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".rs", ".go",
+    ];
+    if !CODE_EXTS.iter().any(|ext| norm.ends_with(ext)) {
         return false;
     }
 
@@ -615,8 +617,8 @@ fn parse_issue_url_number(url_prefix: &str, owner: Option<&str>, repo: Option<&s
 /// Infers the default test runner command for a Python, TypeScript, Rust, or Go repository.
 pub fn infer_test_command(repo_url: &str, test_files: &[String]) -> String {
     let lower_repo = repo_url.to_ascii_lowercase();
-    let is_ts = lower_repo.contains("zod")
-        || lower_repo.contains("hono")
+    let is_ts = lower_repo.contains("soilsense")
+        || lower_repo.contains("pop-engine")
         || test_files.iter().any(|f| {
             f.ends_with(".ts")
                 || f.ends_with(".tsx")
