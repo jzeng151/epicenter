@@ -426,7 +426,7 @@ impl PreparedRepo {
                     create_stdlib_venv(&venv_dir).await?;
                 }
 
-                // Install pytest + coverage into the venv first.
+                // Install pytest + coverage + pyyaml into the venv first.
                 let py_str = venv_python.to_string_lossy().to_string();
                 let base_install = if let Some(ref uv) = uv_bin {
                     run_program(
@@ -434,6 +434,7 @@ impl PreparedRepo {
                         uv.to_string_lossy().as_ref(),
                         &[
                             "pip", "install", "--quiet", "--python", &py_str, "pytest", "coverage",
+                            "pyyaml",
                         ],
                         &[],
                         ENV_SETUP_TIMEOUT,
@@ -443,7 +444,7 @@ impl PreparedRepo {
                     run_program(
                         &venvs_dir,
                         &py_str,
-                        &["-m", "pip", "install", "-q", "pytest", "coverage"],
+                        &["-m", "pip", "install", "-q", "pytest", "coverage", "pyyaml"],
                         &[],
                         ENV_SETUP_TIMEOUT,
                     )
@@ -451,7 +452,7 @@ impl PreparedRepo {
                 };
                 if base_install.exit_code != Some(0) {
                     anyhow::bail!(
-                        "failed to install pytest/coverage into venv: {}",
+                        "failed to install pytest/coverage/pyyaml into venv: {}",
                         tail_chars(&base_install.combined_output, 500)
                     );
                 }
@@ -1479,41 +1480,75 @@ impl PreparedRepo {
             }
         }
 
-        // Capture genuine per-candidate line coverage for Layer 2 Dark-Zone mapping.
+        // Timing loop is complete; release the single timing worktree before fanning out coverage.
+        drop(wt);
+
+        // Capture genuine per-candidate line coverage in parallel for Layer 2 Dark-Zone mapping,
+        // each inside its own isolated temporary worktree, while preserving deterministic order.
         let mut locked_paths: Vec<String> = Vec::new();
         if let Some(lp) = locked_test_path.map(normalize_rel_path).filter(|s| !s.is_empty()) {
             locked_paths.push(lp);
         }
-        let mut candidate_results = Vec::with_capacity(candidates.len());
 
-        for (c_idx, cand) in candidates.iter().enumerate() {
-            reset_worktree(wt.path()).await?;
-            let mut coverage_map = None;
-            let applied_cand = apply_patch_file_in_dir(wt.path(), &cand_patch_files[c_idx]).await?;
-            if applied_cand.exit_code == Some(0) {
+        let coverage_futs = candidates.iter().enumerate().map(|(c_idx, cand)| {
+            let cand_patch_file = &cand_patch_files[c_idx];
+            let repro_patch_file = &repro_patch_file;
+            let scratch_dir = scratch.path();
+            let locked_paths = &locked_paths;
+            async move {
+                let cov_wt = match self.checkout_worktree().await {
+                    Ok(wt) => wt,
+                    Err(err) => {
+                        warn!(
+                            strategy = %cand.strategy_id,
+                            error = %err,
+                            "failed to checkout isolated worktree for coverage capture"
+                        );
+                        return None;
+                    }
+                };
+                let applied_cand = match apply_patch_file_in_dir(cov_wt.path(), cand_patch_file).await {
+                    Ok(out) => out,
+                    Err(err) => {
+                        warn!(
+                            strategy = %cand.strategy_id,
+                            error = %err,
+                            "failed to apply candidate patch in coverage worktree"
+                        );
+                        return None;
+                    }
+                };
+                if applied_cand.exit_code != Some(0) {
+                    return None;
+                }
                 if has_repro_patch {
-                    let _ = apply_patch_file_in_dir(wt.path(), &repro_patch_file).await;
+                    let _ = apply_patch_file_in_dir(cov_wt.path(), repro_patch_file).await;
                 }
                 let parsed_cand = parse_unified_diff(&cand.git_diff);
-                coverage_map = self
-                    .capture_coverage_in_worktree(
-                        &wt,
-                        scratch.path(),
-                        c_idx,
-                        &parsed_cand,
-                        &locked_paths,
-                    )
-                    .await;
+                self.capture_coverage_in_worktree(
+                    &cov_wt,
+                    scratch_dir,
+                    c_idx,
+                    &parsed_cand,
+                    locked_paths,
+                )
+                .await
             }
+        });
+        let coverage_maps = futures::future::join_all(coverage_futs).await;
 
-            candidate_results.push(HostArenaCandidateResult {
+        let candidate_results: Vec<HostArenaCandidateResult> = candidates
+            .iter()
+            .enumerate()
+            .zip(coverage_maps)
+            .map(|((c_idx, cand), coverage_map)| HostArenaCandidateResult {
                 strategy_id: cand.strategy_id.clone(),
                 baseline_samples_ms: baseline_samples_ms.clone(),
                 candidate_samples_ms: per_cand_samples[c_idx].clone(),
                 peak_memory_kb: None,
                 coverage_map,
-            });
-        }
+            })
+            .collect();
 
         let summary_notes = format!(
             "Single-host interleaved Arena ran {trials} measured trials (+{warmup} warmup) across {} candidate(s) using {bench_label}.",
@@ -3131,6 +3166,18 @@ mod tests {
             .unwrap();
         assert_eq!(pytest_a.exit_code, Some(1), "pytest in worktree A must observe sentinel=99999 failure");
         assert_eq!(pytest_b.exit_code, Some(0), "pytest in worktree B must still pass");
+        // Verify pyyaml is pre-installed in the base Python venv alongside pytest & coverage
+        let yaml_check = prepared
+            .run_command_in_worktree(
+                &wt_b,
+                "python -c 'import yaml; print(yaml.safe_load(\"ok: true\")[\"ok\"])'",
+                Duration::from_secs(15),
+            )
+            .await
+            .unwrap();
+        assert_eq!(yaml_check.exit_code, Some(0), "pyyaml must be installed in base Python venv");
+        assert_eq!(yaml_check.stdout.trim(), "True");
+
         drop(wt_a);
         drop(wt_b);
 
@@ -3333,7 +3380,22 @@ mod tests {
         assert!(gt_tamper.tampered_with_ground_truth);
         assert!(!gt_tamper.resolved_ground_truth);
 
-        // 11. Single-Host Interleaved Arena produces real Instant timings & genuine CoverageMap
+        // 11. Single-Host Interleaved Arena produces real Instant timings & parallel CoverageMaps
+        //     in deterministic candidate order.
+        let valid_synth_alt = prepared
+            .synthesize_diff_from_edits(
+                &[FileEdit {
+                    path: "src/calc/core.py".to_string(),
+                    old_text: "    return price - pct".to_string(),
+                    new_text: "    return price - (price * pct / 100.0)".to_string(),
+                }],
+                &[],
+                Some(repro_path),
+            )
+            .await
+            .unwrap();
+        assert!(valid_synth_alt.errors.is_empty());
+
         let bench_spec = BenchmarkHarnessSpec {
             name: "calc discount microbench".to_string(),
             command: "python bench.py".to_string(),
@@ -3359,10 +3421,16 @@ mod tests {
                 Some(repro_path),
                 &repro_patch,
                 "pytest -q tests/test_epicenter_repro.py",
-                &[ArenaCandidateInput {
-                    strategy_id: "s1-fix".to_string(),
-                    git_diff: valid_synth.git_diff.clone(),
-                }],
+                &[
+                    ArenaCandidateInput {
+                        strategy_id: "s1-fix".to_string(),
+                        git_diff: valid_synth.git_diff.clone(),
+                    },
+                    ArenaCandidateInput {
+                        strategy_id: "s2-alt-fix".to_string(),
+                        git_diff: valid_synth_alt.git_diff.clone(),
+                    },
+                ],
                 Some(sid),
                 Some(&tx),
             )
@@ -3372,26 +3440,37 @@ mod tests {
         assert_eq!(arena_res.trials_run, 3);
         assert_eq!(arena_res.baseline_samples_ms.len(), 3);
         assert!(arena_res.baseline_samples_ms.iter().all(|&v| v > 0.0 && v.is_finite()));
-        assert_eq!(arena_res.candidates.len(), 1);
-        let c0 = &arena_res.candidates[0];
-        assert_eq!(c0.candidate_samples_ms.len(), 3);
-        assert!(c0.candidate_samples_ms.iter().all(|&v| v > 0.0 && v.is_finite()));
+        assert_eq!(arena_res.candidates.len(), 2);
+        assert_eq!(arena_res.candidates[0].strategy_id, "s1-fix");
+        assert_eq!(arena_res.candidates[1].strategy_id, "s2-alt-fix");
+        for cand_res in &arena_res.candidates {
+            assert_eq!(cand_res.candidate_samples_ms.len(), 3);
+            assert!(cand_res
+                .candidate_samples_ms
+                .iter()
+                .all(|&v| v > 0.0 && v.is_finite()));
+            // Verify genuine CoverageMap captured in parallel for src/calc/core.py
+            let cov = cand_res
+                .coverage_map
+                .as_ref()
+                .expect("real coverage map captured");
+            let pct = cov
+                .symbol_coverage_pct("src/calc/core.py", 1, 11)
+                .expect("core.py coverage present");
+            assert!(
+                pct > 0.0,
+                "expected positive coverage for src/calc/core.py, got {pct}"
+            );
+        }
 
-        // Verify genuine CoverageMap captured for src/calc/core.py
-        let cov = c0.coverage_map.as_ref().expect("real coverage map captured");
-        let pct = cov
-            .symbol_coverage_pct("src/calc/core.py", 1, 11)
-            .expect("core.py coverage present");
-        assert!(pct > 0.0, "expected positive coverage for src/calc/core.py, got {pct}");
-
-        // Verify live trial events streamed
+        // Verify live trial events streamed (3 trials * 2 candidates = 6)
         let mut streamed_trials = 0usize;
         while let Ok(evt) = rx.try_recv() {
             if matches!(evt, LiveEvent::ArenaTrialSample { .. }) {
                 streamed_trials += 1;
             }
         }
-        assert_eq!(streamed_trials, 3);
+        assert_eq!(streamed_trials, 6);
 
         // 12. Multimodal findings formatting helper
         assert_eq!(crate::intake::format_multimodal_findings(&[]), "None");

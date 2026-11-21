@@ -15,7 +15,7 @@ use tracing::warn;
 ///
 /// Generates orthogonal `StrategySpec`s (defaulting to K=3 crisp strategies spanning
 /// `SurgicalHotfix`, `AlgorithmicOptimization`/`TargetedRefactor`, and `ArchitecturalRootCause`)
-/// with explicit `anti_overlap_rules` and a fast (~20–100ms) self-contained `BenchmarkHarnessSpec`.
+/// with explicit `anti_overlap_rules` and a fast (~15–30ms) self-contained `BenchmarkHarnessSpec`.
 pub async fn run_planner_stage(
     gemini: &GeminiClient,
     session: &mut TournamentSession,
@@ -46,7 +46,7 @@ pub async fn run_planner_stage(
         red_gate.patch()
     );
     let focused_sources =
-        repo.prompt_focused_source_context(&session.intake.suspect_files, &focus_text, 12_000);
+        repo.prompt_focused_source_context(&session.intake.suspect_files, &focus_text, 10_000);
 
     let prompt = format!(
         "You are Stage 3 (Dynamic-K Orthogonal Strategy Architect) of the Epicenter tournament.\n\
@@ -65,9 +65,11 @@ pub async fn run_planner_stage(
          FAST ARENA MICRO-BENCHMARK SPEC:\n\
          - Design `shared_benchmark_spec` with `trials: 3`, `warmup_trials: 1`, `metric_unit: \"ms\"`.\n\
          - Provide a fast, self-contained `script_content` in {} that exercises the affected code path\n\
-           in ~20–60ms per run (loops over the hot function/API directly, exits 0 on BOTH unmodified\n\
+           in ~15–30ms per run (loops over the hot function/API directly, exits 0 on BOTH unmodified\n\
            baseline and patched code so wall-clock timings are cleanly comparable!).\n\
-         - Keep total Stage 5 benchmark runtime under ~8 seconds across all candidates.\n\n\
+         - STRICT RUNTIME BUDGET: NEVER write heavy 500–1000ms loops (those burn ~15s across warmup+trials!).\n\
+           Choose a modest iteration count targeting ~15–30ms per invocation so total Stage 5 benchmark\n\
+           runtime stays under ~3 seconds across all candidates.\n\n\
          Repository Runtime: {}\n\
          Issue Title: {}\n\
          Task Kind: {:?}\n\

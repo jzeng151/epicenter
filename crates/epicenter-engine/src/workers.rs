@@ -209,7 +209,7 @@ async fn execute_single_worker(
         strategy.thesis,
         red_gate.patch()
     );
-    let source_context = repo.prompt_focused_source_context(&combined_hints, &focus_text, 40_000);
+    let source_context = repo.prompt_focused_source_context(&combined_hints, &focus_text, 20_000);
 
     let caller_test_rule = if strategy.allow_caller_tests {
         "CALLER TESTS ALLOWED: Add targeted regression tests for Ring 1 callers in a separate file via `new_files` (NEVER editing the locked Red-Gate test) to eliminate untested dark zones."
@@ -304,7 +304,7 @@ async fn execute_single_worker(
             targets = strategy.target_files_hint,
             anti = strategy.anti_overlap_rules,
             test_cmd = red_gate.test_command(),
-            red_patch = truncate_str(red_gate.patch(), 8_000),
+            red_patch = truncate_str(red_gate.patch(), 4_000),
         );
 
         let mut req = CreateInteractionRequest::for_model(model, prompt);

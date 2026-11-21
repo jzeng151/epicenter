@@ -293,7 +293,7 @@ async fn run_carbon_semantic_audit(
          3. `bandaid_debt_warning`: null if root_cause_depth_score >= 60, otherwise a crisp 1-sentence\n\
             warning explaining what upstream invariant debt remains.\n\n\
          Issue Title: {issue_title}\n\
-         Problem Statement:\n{problem_statement}\n\n\
+         Problem Statement:\n{problem}\n\n\
          MULTIMODAL FINDINGS (verify whether this candidate resolves every visual/audio symptom):\n{multimodal_block}\n\n\
          STRUCTURAL BLAST RADIUS:\n\
          - Ring 0 (Mutated): {ring0_summary}\n\
@@ -303,9 +303,10 @@ async fn run_carbon_semantic_audit(
          - Base Structural Risk Score: {base_risk:.1}\n\n\
          CANDIDATE DIFF:\n```diff\n{diff}\n```\n\n\
          Keep each hazard description concise (1 sentence, max 3 hazards). Return STRICT JSON matching the schema.",
+        problem = truncate_str(problem_statement, 2_000),
         dark_zones = structural_report.dark_zone_count(),
         base_risk = structural_report.composite_risk_score,
-        diff = truncate_str(git_diff, 10_000),
+        diff = truncate_str(git_diff, 8_000),
     );
 
     let mut req = CreateInteractionRequest::for_model(Gemini4Model::Carbon, prompt);
@@ -327,13 +328,14 @@ pub(crate) fn auditor_generation_config() -> GenerationConfig {
     }
 }
 
-fn summarize_nodes(nodes: &[epicenter_common::GraphNode]) -> String {
+pub(crate) fn summarize_nodes(nodes: &[epicenter_common::GraphNode]) -> String {
+    const MAX_SUMMARY_NODES: usize = 12;
     if nodes.is_empty() {
         return "(none)".to_string();
     }
-    nodes
+    let mut summary = nodes
         .iter()
-        .take(15)
+        .take(MAX_SUMMARY_NODES)
         .map(|n| {
             let cov = match n.test_coverage_pct {
                 Some(pct) => format!("{pct:.0}%"),
@@ -347,7 +349,12 @@ fn summarize_nodes(nodes: &[epicenter_common::GraphNode]) -> String {
             format!("{} ({}:{}, cov={}{})", n.symbol, n.file_path, n.line, cov, dz)
         })
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(", ");
+    if nodes.len() > MAX_SUMMARY_NODES {
+        let extra = nodes.len() - MAX_SUMMARY_NODES;
+        summary.push_str(&format!(", ... (+{extra} more)"));
+    }
+    summary
 }
 
 fn apply_structural_dual_score_fallback(

@@ -915,4 +915,33 @@ Done!
         assert!(ctx.contains("if self.show_envvar and self.envvar is not None:"));
         assert!(ctx.len() <= 13_000);
     }
+
+    #[test]
+    fn auditor_summarize_nodes_caps_at_twelve_with_overflow_suffix() {
+        let make_node = |i: usize| epicenter_common::GraphNode {
+            id: format!("n{i}"),
+            symbol: format!("fn_{i}"),
+            file_path: format!("src/mod_{i}.py"),
+            line: i + 1,
+            ring: epicenter_common::ImpactRing::Ring1,
+            test_coverage_pct: Some(80.0),
+            is_untested_dark_zone: false,
+            radial_x: 0.0,
+            radial_y: 0.0,
+        };
+
+        assert_eq!(auditor::summarize_nodes(&[]), "(none)");
+
+        let twelve: Vec<_> = (0..12).map(make_node).collect();
+        let sum12 = auditor::summarize_nodes(&twelve);
+        assert!(sum12.contains("fn_0"));
+        assert!(sum12.contains("fn_11"));
+        assert!(!sum12.contains("more)"));
+
+        let fifteen: Vec<_> = (0..15).map(make_node).collect();
+        let sum15 = auditor::summarize_nodes(&fifteen);
+        assert!(sum15.contains("fn_11"));
+        assert!(!sum15.contains("fn_12"));
+        assert!(sum15.ends_with("... (+3 more)"));
+    }
 }
