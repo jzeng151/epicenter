@@ -46,7 +46,7 @@ pub async fn run_planner_stage(
         red_gate.patch()
     );
     let focused_sources =
-        repo.prompt_focused_source_context(&session.intake.suspect_files, &focus_text, 36_000);
+        repo.prompt_focused_source_context(&session.intake.suspect_files, &focus_text, 12_000);
 
     let prompt = format!(
         "You are Stage 3 (Dynamic-K Orthogonal Strategy Architect) of the Epicenter tournament.\n\
@@ -60,13 +60,14 @@ pub async fn run_planner_stage(
          - Set `allow_caller_tests: true` on `architectural_root_cause` strategies so workers can add\n\
            regression tests for untested callers and shrink dark-zone blast-radius risk.\n\
          - Give every strategy explicit `anti_overlap_rules` forbidding it from copying sibling approaches.\n\
-         - Strategy IDs must be short lowercase slugs (e.g. \"s1-hotfix\", \"s2-algorithmic\", \"s3-root-cause\").\n\n\
+         - Strategy IDs must be short lowercase slugs (e.g. \"s1-hotfix\", \"s2-algorithmic\", \"s3-root-cause\").\n\
+         - Keep each strategy's thesis, tradeoff_axis, and risk_hypothesis crisp (1-2 concise sentences).\n\n\
          FAST ARENA MICRO-BENCHMARK SPEC:\n\
-         - Design `shared_benchmark_spec` with `trials: 5`, `warmup_trials: 1`, `metric_unit: \"ms\"`.\n\
+         - Design `shared_benchmark_spec` with `trials: 3`, `warmup_trials: 1`, `metric_unit: \"ms\"`.\n\
          - Provide a fast, self-contained `script_content` in {} that exercises the affected code path\n\
-           in ~20–100ms per run (loops over the hot function/API directly, exits 0 on BOTH unmodified\n\
+           in ~20–60ms per run (loops over the hot function/API directly, exits 0 on BOTH unmodified\n\
            baseline and patched code so wall-clock timings are cleanly comparable!).\n\
-         - Keep total Stage 5 benchmark runtime under ~10 seconds across all candidates.\n\n\
+         - Keep total Stage 5 benchmark runtime under ~8 seconds across all candidates.\n\n\
          Repository Runtime: {}\n\
          Issue Title: {}\n\
          Task Kind: {:?}\n\
@@ -200,9 +201,9 @@ pub fn normalize_and_validate_plan(
     }
 
     if plan.shared_benchmark_spec.trials == 0 {
-        plan.shared_benchmark_spec.trials = 6;
+        plan.shared_benchmark_spec.trials = 3;
     } else {
-        plan.shared_benchmark_spec.trials = plan.shared_benchmark_spec.trials.clamp(3, 7);
+        plan.shared_benchmark_spec.trials = plan.shared_benchmark_spec.trials.clamp(3, 5);
     }
     if plan.shared_benchmark_spec.warmup_trials == 0 {
         plan.shared_benchmark_spec.warmup_trials = 1;

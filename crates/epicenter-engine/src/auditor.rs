@@ -302,10 +302,10 @@ async fn run_carbon_semantic_audit(
          - Untested Dark Zones: {dark_zones}\n\
          - Base Structural Risk Score: {base_risk:.1}\n\n\
          CANDIDATE DIFF:\n```diff\n{diff}\n```\n\n\
-         Return STRICT JSON matching the schema.",
+         Keep each hazard description concise (1 sentence, max 3 hazards). Return STRICT JSON matching the schema.",
         dark_zones = structural_report.dark_zone_count(),
         base_risk = structural_report.composite_risk_score,
-        diff = truncate_str(git_diff, 18_000),
+        diff = truncate_str(git_diff, 10_000),
     );
 
     let mut req = CreateInteractionRequest::for_model(Gemini4Model::Carbon, prompt);

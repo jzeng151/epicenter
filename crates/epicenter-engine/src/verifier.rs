@@ -1364,9 +1364,9 @@ impl PreparedRepo {
         event_tx: Option<&broadcast::Sender<LiveEvent>>,
     ) -> anyhow::Result<HostArenaResult> {
         let trials = if bench_spec.trials == 0 {
-            5
+            3
         } else {
-            bench_spec.trials.clamp(3, 7)
+            bench_spec.trials.clamp(3, 5)
         };
         let warmup = bench_spec.warmup_trials.clamp(1, 2);
 

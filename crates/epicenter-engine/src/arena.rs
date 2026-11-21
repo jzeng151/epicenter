@@ -41,9 +41,9 @@ pub async fn run_arena_stage(
         .collect();
 
     let clamped_trials = if bench_spec.trials == 0 {
-        5
+        3
     } else {
-        bench_spec.trials.clamp(3, 7)
+        bench_spec.trials.clamp(3, 5)
     };
 
     emit_event(
