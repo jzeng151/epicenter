@@ -1,0 +1,24 @@
+[package]
+name = "epicenter-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+epicenter-common = { workspace = true }
+epicenter-gemini = { workspace = true }
+epicenter-graph = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+walkdir = { workspace = true }
+tempfile = { workspace = true }
+base64 = { workspace = true }

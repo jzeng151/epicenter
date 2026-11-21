@@ -1,0 +1,7 @@
+target/
+dist/
+*.db
+*.db-*
+.env
+eval_runs/
+.DS_Store
