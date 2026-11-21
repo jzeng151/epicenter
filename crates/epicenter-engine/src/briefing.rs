@@ -1,3 +1,4 @@
+use crate::intake::format_multimodal_findings;
 use crate::repo::{emit_event, emit_log, extract_json_from_text};
 use crate::EngineRunOptions;
 use epicenter_common::{
@@ -47,7 +48,7 @@ pub async fn run_briefing_stage(
 
     match gemini.synthesize_war_room_wav(&session.war_room_script).await {
         Ok(wav_bytes) if !wav_bytes.is_empty() => {
-            let audio_url = format!("/api/sessions/{}/briefing.wav", session.id);
+            let audio_url = format!("/api/sessions/{}/audio.wav", session.id);
             session.audio_briefing_url = Some(audio_url.clone());
             session.updated_at = chrono::Utc::now();
             emit_event(
@@ -117,18 +118,22 @@ async fn generate_war_room_script(
         .and_then(|s| s.recommended_strategy_id.as_deref())
         .unwrap_or("none");
 
+    let multimodal_block = format_multimodal_findings(&session.intake.multimodal_findings);
+
     let prompt = format!(
         "Write a crisp 5-turn 2-speaker war-room executive briefing between `architect` and `auditor`.\n\
          Total length: ~85–110 words (~35 seconds spoken aloud). No markdown symbols, no bullet lists,\n\
-         speak natural concise prose citing real metrics (speedup %, blast risk, dark zones, root-cause depth).\n\n\
+         speak natural concise prose citing real metrics (speedup %, blast risk, dark zones, root-cause depth)\n\
+         and mentioning any multimodal visual/audio findings when present.\n\n\
          Issue: {}\n\
          Recommended Winner: {}\n\
+         Multimodal Findings:\n{multimodal_block}\n\
          Candidates:\n{}\n\n\
          Return STRICT JSON matching the schema with 4 to 6 alternating turns.",
         session.intake.title, recommended, candidate_summary
     );
 
-    for model in [Gemini4Model::Carbon, Gemini4Model::Hydrogen] {
+    for model in [Gemini4Model::Hydrogen, Gemini4Model::Carbon] {
         let mut req = CreateInteractionRequest::for_model(model, prompt.clone());
         req.system_instruction = Some(
             "Produce a tight, executive-ready 2-speaker war-room dialogue in strict JSON.".to_string(),
