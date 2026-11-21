@@ -9,58 +9,90 @@ const PARETO_STYLES: &str = r#"
 .epi-pareto-wrap {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   color: #e2e8f0;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .epi-panel-card {
   background: #0f1624;
   border: 1px solid #1e293b;
-  border-radius: 14px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 20px 22px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
+  gap: 16px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
 }
 .epi-panel-head {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 12px;
   border-bottom: 1px solid #1e293b;
-  padding-bottom: 10px;
+  padding-bottom: 14px;
 }
 .epi-panel-title {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
   color: #f8fafc;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .epi-panel-sub {
-  font-size: 12px;
+  font-size: 12.5px;
   color: #94a3b8;
+  margin-top: 3px;
+}
+.epi-subtab-bar {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 9px;
+  background: #0b1220;
+  border: 1px solid #1e293b;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.epi-subtab-btn {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+.epi-subtab-btn:hover {
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.04);
+}
+.epi-subtab-btn.active {
+  background: rgba(56, 189, 248, 0.16);
+  color: #f8fafc;
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.42);
 }
 
 .epi-cand-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
 }
 .epi-cand-card {
   background: #0b1220;
   border: 1px solid #1e293b;
-  border-radius: 11px;
-  padding: 12px;
+  border-radius: 10px;
+  padding: 14px;
   text-align: left;
   color: #e2e8f0;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
 }
 .epi-cand-card:hover {
@@ -210,21 +242,17 @@ const PARETO_STYLES: &str = r#"
 
 fn tier_info(tier: StrategyDepthTier) -> (&'static str, &'static str) {
     match tier {
-        StrategyDepthTier::SurgicalHotfix => ("Surgical Hotfix", "epi-tag epi-tag-amber"),
+        StrategyDepthTier::SurgicalHotfix => ("Quick Fix", "epi-tag epi-tag-amber"),
         StrategyDepthTier::TargetedRefactor => ("Targeted Refactor", "epi-tag epi-tag-cyan"),
-        StrategyDepthTier::ArchitecturalRootCause => {
-            ("Architectural Root-Cause", "epi-tag epi-tag-violet")
-        }
-        StrategyDepthTier::AlgorithmicOptimization => {
-            ("Algorithmic Opt", "epi-tag epi-tag-cyan")
-        }
+        StrategyDepthTier::ArchitecturalRootCause => ("Root-Cause Fix", "epi-tag epi-tag-violet"),
+        StrategyDepthTier::AlgorithmicOptimization => ("Perf Optimization", "epi-tag epi-tag-cyan"),
     }
 }
 
 fn badge_style(badge: CandidateBadge) -> (&'static str, &'static str) {
     match badge {
         CandidateBadge::BestOverall => ("★ Best Overall", "epi-tag epi-tag-gold"),
-        CandidateBadge::SafestEmergencyHotfix => ("◆ Safest Hotfix", "epi-tag epi-tag-cyan"),
+        CandidateBadge::SafestEmergencyHotfix => ("◆ Safest Fix", "epi-tag epi-tag-cyan"),
         CandidateBadge::FastestThroughput => ("⚡ Fastest", "epi-tag epi-tag-emerald"),
     }
 }
@@ -233,10 +261,10 @@ fn status_badge(cand: &CandidateResult) -> (&'static str, &'static str) {
     match cand.status {
         CandidateStatus::Pending => ("Pending", "epi-tag"),
         CandidateStatus::Running => ("Running", "epi-tag epi-tag-cyan"),
-        CandidateStatus::FailedTests => ("Failed Tests", "epi-tag epi-tag-red"),
+        CandidateStatus::FailedTests => ("Tests Failed", "epi-tag epi-tag-red"),
         CandidateStatus::PassedTests => {
             if cand.is_green() {
-                ("Tests Green", "epi-tag epi-tag-emerald")
+                ("Tests Passed", "epi-tag epi-tag-emerald")
             } else {
                 ("Partial Pass", "epi-tag epi-tag-amber")
             }
@@ -244,9 +272,9 @@ fn status_badge(cand: &CandidateResult) -> (&'static str, &'static str) {
         CandidateStatus::BenchmarkDone => ("Benchmarked", "epi-tag epi-tag-cyan"),
         CandidateStatus::Audited => {
             if cand.is_green() {
-                ("Audited · Green", "epi-tag epi-tag-emerald")
+                ("Verified", "epi-tag epi-tag-emerald")
             } else {
-                ("Audited · Red", "epi-tag epi-tag-red")
+                ("Failed", "epi-tag epi-tag-red")
             }
         }
     }
@@ -288,6 +316,173 @@ fn short_label(s: &str, max: usize) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PerfSubTab {
+    TradeOff,
+    Benchmark,
+}
+
+#[component]
+pub fn CandidateApproachesStrip(
+    session: Signal<Option<TournamentSession>>,
+    selected_strategy_id: RwSignal<Option<String>>,
+) -> impl IntoView {
+    view! {
+        <style>{PARETO_STYLES}</style>
+        {move || {
+            let Some(sess) = session.get() else {
+                return view! { <div></div> }.into_any();
+            };
+
+            let selected_id = active_candidate_id(&sess, selected_strategy_id.get().as_deref());
+            let specs: Vec<StrategySpec> = sess
+                .strategy_plan
+                .as_ref()
+                .map(|p| p.strategies.clone())
+                .unwrap_or_default();
+            let candidates = sess.candidates.clone();
+
+            view! {
+                <section class="epi-panel-card">
+                    <div class="epi-panel-head">
+                        <div>
+                            <h2 class="epi-panel-title">
+                                <span class="model-dot dot-amber"></span>
+                                {format!("Candidate Approaches ({})", candidates.len())}
+                            </h2>
+                            <div class="epi-panel-sub">
+                                {sess
+                                    .strategy_plan
+                                    .as_ref()
+                                    .map(|p| p.degree_of_freedom_rationale.clone())
+                                    .filter(|s| !s.trim().is_empty())
+                                    .unwrap_or_else(|| "Select an approach to inspect its code impact, performance, and diff below.".to_string())}
+                            </div>
+                        </div>
+                    </div>
+
+                    {if candidates.is_empty() {
+                        view! {
+                            <div class="epi-empty-box">
+                                "Planning and building candidate approaches..."
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <div class="epi-cand-grid">
+                                {candidates.iter().map(|cand| {
+                                    let id_for_click = cand.strategy_id.clone();
+                                    let is_sel = selected_id.as_deref() == Some(cand.strategy_id.as_str());
+                                    let spec = specs.iter().find(|s| s.id == cand.strategy_id);
+                                    let title = spec
+                                        .map(|s| s.title.clone())
+                                        .unwrap_or_else(|| cand.strategy_id.clone());
+                                    let tier = spec
+                                        .map(|s| s.depth_tier)
+                                        .unwrap_or_default();
+                                    let (tier_text, tier_cls) = tier_info(tier);
+                                    let (st_text, st_cls) = status_badge(cand);
+
+                                    let risk = cand.blast_radius.as_ref().map(|b| b.composite_risk_score);
+                                    let depth = cand.blast_radius.as_ref().map(|b| b.root_cause_depth_score);
+                                    let speedup = cand.arena_metrics.as_ref().map(|m| m.speedup_pct);
+                                    let has_bandaid = cand
+                                        .blast_radius
+                                        .as_ref()
+                                        .and_then(|b| b.bandaid_debt_warning.as_ref())
+                                        .is_some();
+
+                                    let card_cls = match (is_sel, cand.status == CandidateStatus::FailedTests) {
+                                        (true, true) => "epi-cand-card selected failed",
+                                        (true, false) => "epi-cand-card selected",
+                                        (false, true) => "epi-cand-card failed",
+                                        (false, false) => "epi-cand-card",
+                                    };
+
+                                    let risk_color = match risk {
+                                        Some(r) if r <= 25.0 => "#10b981",
+                                        Some(r) if r <= 55.0 => "#f59e0b",
+                                        Some(_) => "#ef4444",
+                                        None => "#64748b",
+                                    };
+                                    let depth_color = match depth {
+                                        Some(d) if d >= 70.0 => "#10b981",
+                                        Some(d) if d >= 45.0 => "#38bdf8",
+                                        Some(_) => "#f59e0b",
+                                        None => "#64748b",
+                                    };
+                                    let speed_color = match speedup {
+                                        Some(sp) if sp > 2.0 => "#10b981",
+                                        Some(sp) if sp < -2.0 => "#ef4444",
+                                        Some(_) => "#e2e8f0",
+                                        None => "#64748b",
+                                    };
+
+                                    let badges = cand.badges.clone();
+
+                                    view! {
+                                        <button
+                                            type="button"
+                                            class=card_cls
+                                            on:click=move |_| selected_strategy_id.set(Some(id_for_click.clone()))
+                                        >
+                                            <div class="epi-cand-top">
+                                                <div class="epi-cand-name">{title}</div>
+                                                <span class=st_cls>{st_text}</span>
+                                            </div>
+
+                                            <div class="epi-tag-row">
+                                                <span class=tier_cls>{tier_text}</span>
+                                                {badges.into_iter().map(|b| {
+                                                    let (b_text, b_cls) = badge_style(b);
+                                                    view! { <span class=b_cls>{b_text}</span> }
+                                                }).collect_view()}
+                                                {cand.pareto_optimal.then(|| view! {
+                                                    <span class="epi-tag epi-tag-cyan">"Top Trade-Off"</span>
+                                                })}
+                                                {cand.added_caller_tests.then(|| view! {
+                                                    <span class="epi-tag epi-tag-emerald">"+ Caller Tests"</span>
+                                                })}
+                                                {cand.is_rescue_candidate.then(|| view! {
+                                                    <span class="epi-tag epi-tag-violet">"Escalated Fix"</span>
+                                                })}
+                                                {has_bandaid.then(|| view! {
+                                                    <span class="epi-tag epi-tag-amber">"Shallow Fix"</span>
+                                                })}
+                                            </div>
+
+                                            <div class="epi-cand-metrics">
+                                                <div class="epi-mini-stat">
+                                                    <span class="epi-mini-label">"Impact Risk"</span>
+                                                    <span class="epi-mini-val" style=format!("color:{risk_color};")>
+                                                        {risk.map(|v| format!("{v:.0}/100")).unwrap_or_else(|| "—".into())}
+                                                    </span>
+                                                </div>
+                                                <div class="epi-mini-stat">
+                                                    <span class="epi-mini-label">"Root-Cause"</span>
+                                                    <span class="epi-mini-val" style=format!("color:{depth_color};")>
+                                                        {depth.map(|v| format!("{v:.0}/100")).unwrap_or_else(|| "—".into())}
+                                                    </span>
+                                                </div>
+                                                <div class="epi-mini-stat">
+                                                    <span class="epi-mini-label">"Speedup"</span>
+                                                    <span class="epi-mini-val" style=format!("color:{speed_color};")>
+                                                        {speedup.map(|v| format!("{v:+.1}%")).unwrap_or_else(|| "—".into())}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </button>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        }.into_any()
+                    }}
+                </section>
+            }.into_any()
+        }}
+    }
+}
+
 #[component]
 pub fn ParetoAndArenaPanel(
     session: Signal<Option<TournamentSession>>,
@@ -295,22 +490,26 @@ pub fn ParetoAndArenaPanel(
 ) -> impl IntoView {
     let hovered_scatter_id = RwSignal::new(Option::<String>::None);
     let hovered_trial_idx = RwSignal::new(Option::<usize>::None);
+    let active_subtab = RwSignal::new(PerfSubTab::TradeOff);
 
     view! {
         <style>{PARETO_STYLES}</style>
-        <div class="epi-pareto-wrap">
+        <section class="epi-panel-card">
             {move || {
                 let Some(sess) = session.get() else {
                     return view! {
-                        <section class="epi-panel-card">
-                            <div class="epi-panel-head">
-                                <h2 class="epi-panel-title">"Pareto Frontier & Benchmark Arena"</h2>
-                                <span class="epi-panel-sub">"Dual-Score Strategy Tournament"</span>
+                        <div class="epi-panel-head">
+                            <div>
+                                <h2 class="epi-panel-title">
+                                    <span class="model-dot dot-amber"></span>
+                                    "Trade-Off & Performance"
+                                </h2>
+                                <div class="epi-panel-sub">"Compare impact risk, fix depth, and runtime speed across approaches."</div>
                             </div>
-                            <div class="epi-empty-box">
-                                "Launch a tournament session to compare 1–5 orthogonal strategies across Impact Risk, Root-Cause Depth, and Interleaved Arena Speedup."
-                            </div>
-                        </section>
+                        </div>
+                        <div class="epi-empty-box">
+                            "Launch or select a comparison to view the risk-vs-speed trade-off and latency benchmarks."
+                        </div>
                     }.into_any();
                 };
 
@@ -329,164 +528,58 @@ pub fn ParetoAndArenaPanel(
                     .and_then(|id| candidates.iter().find(|c| c.strategy_id == id))
                     .cloned();
 
+                let subtab = active_subtab.get();
+                let sub_desc = match subtab {
+                    PerfSubTab::TradeOff => "Lower Impact Risk (left) and higher Speedup (up) are better. Larger bubbles indicate deeper root-cause fixes.",
+                    PerfSubTab::Benchmark => "Baseline vs. candidate latency measured across interleaved benchmark trials.",
+                };
+
                 view! {
-                    // 1. Candidate Strategy Selector Cards
-                    <section class="epi-panel-card">
-                        <div class="epi-panel-head">
-                            <div>
-                                <h2 class="epi-panel-title">
-                                    {format!("Candidate Tournament ({} Strategies)", candidates.len())}
-                                </h2>
-                                <div class="epi-panel-sub">
-                                    {sess
-                                        .strategy_plan
-                                        .as_ref()
-                                        .map(|p| p.degree_of_freedom_rationale.clone())
-                                        .unwrap_or_else(|| "Click any strategy to inspect its Blast-Radius Ripple Map & Arena telemetry.".to_string())}
-                                </div>
-                            </div>
+                    <div class="epi-panel-head">
+                        <div>
+                            <h2 class="epi-panel-title">
+                                <span class="model-dot dot-amber"></span>
+                                "Trade-Off & Performance"
+                            </h2>
+                            <div class="epi-panel-sub">{sub_desc}</div>
                         </div>
+                        <div class="epi-subtab-bar" role="tablist" aria-label="Performance view">
+                            <button
+                                type="button"
+                                class=if subtab == PerfSubTab::TradeOff { "epi-subtab-btn active" } else { "epi-subtab-btn" }
+                                on:click=move |_| active_subtab.set(PerfSubTab::TradeOff)
+                            >
+                                "Risk vs. Speed"
+                            </button>
+                            <button
+                                type="button"
+                                class=if subtab == PerfSubTab::Benchmark { "epi-subtab-btn active" } else { "epi-subtab-btn" }
+                                on:click=move |_| active_subtab.set(PerfSubTab::Benchmark)
+                            >
+                                "Latency Benchmark"
+                            </button>
+                        </div>
+                    </div>
 
-                        {if candidates.is_empty() {
-                            view! {
-                                <div class="epi-empty-box">
-                                    "Waiting for Stage 3 Carbon Architect & Stage 4 Parallel Neon Workers…"
-                                </div>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <div class="epi-cand-grid">
-                                    {candidates.iter().map(|cand| {
-                                        let id_for_click = cand.strategy_id.clone();
-                                        let is_sel = selected_id.as_deref() == Some(cand.strategy_id.as_str());
-                                        let spec = specs.iter().find(|s| s.id == cand.strategy_id);
-                                        let title = spec
-                                            .map(|s| s.title.clone())
-                                            .unwrap_or_else(|| cand.strategy_id.clone());
-                                        let tier = spec
-                                            .map(|s| s.depth_tier)
-                                            .unwrap_or_default();
-                                        let (tier_text, tier_cls) = tier_info(tier);
-                                        let (st_text, st_cls) = status_badge(cand);
-
-                                        let risk = cand.blast_radius.as_ref().map(|b| b.composite_risk_score);
-                                        let depth = cand.blast_radius.as_ref().map(|b| b.root_cause_depth_score);
-                                        let speedup = cand.arena_metrics.as_ref().map(|m| m.speedup_pct);
-                                        let has_bandaid = cand
-                                            .blast_radius
-                                            .as_ref()
-                                            .and_then(|b| b.bandaid_debt_warning.as_ref())
-                                            .is_some();
-
-                                        let card_cls = match (is_sel, cand.status == CandidateStatus::FailedTests) {
-                                            (true, true) => "epi-cand-card selected failed",
-                                            (true, false) => "epi-cand-card selected",
-                                            (false, true) => "epi-cand-card failed",
-                                            (false, false) => "epi-cand-card",
-                                        };
-
-                                        let risk_color = match risk {
-                                            Some(r) if r <= 25.0 => "#10b981",
-                                            Some(r) if r <= 55.0 => "#f59e0b",
-                                            Some(_) => "#ef4444",
-                                            None => "#64748b",
-                                        };
-                                        let depth_color = match depth {
-                                            Some(d) if d >= 70.0 => "#10b981",
-                                            Some(d) if d >= 45.0 => "#38bdf8",
-                                            Some(_) => "#f59e0b",
-                                            None => "#64748b",
-                                        };
-                                        let speed_color = match speedup {
-                                            Some(sp) if sp > 2.0 => "#10b981",
-                                            Some(sp) if sp < -2.0 => "#ef4444",
-                                            Some(_) => "#e2e8f0",
-                                            None => "#64748b",
-                                        };
-
-                                        let badges = cand.badges.clone();
-
-                                        view! {
-                                            <button
-                                                type="button"
-                                                class=card_cls
-                                                on:click=move |_| selected_strategy_id.set(Some(id_for_click.clone()))
-                                            >
-                                                <div class="epi-cand-top">
-                                                    <div>
-                                                        <div class="epi-cand-name">{title}</div>
-                                                        <div class="epi-cand-id">{cand.strategy_id.clone()}</div>
-                                                    </div>
-                                                    <span class=st_cls>{st_text}</span>
-                                                </div>
-
-                                                <div class="epi-tag-row">
-                                                    <span class=tier_cls>{tier_text}</span>
-                                                    {badges.into_iter().map(|b| {
-                                                        let (b_text, b_cls) = badge_style(b);
-                                                        view! { <span class=b_cls>{b_text}</span> }
-                                                    }).collect_view()}
-                                                    {cand.pareto_optimal.then(|| view! {
-                                                        <span class="epi-tag epi-tag-cyan">"Pareto"</span>
-                                                    })}
-                                                    {cand.added_caller_tests.then(|| view! {
-                                                        <span class="epi-tag epi-tag-emerald">"+ Caller Tests"</span>
-                                                    })}
-                                                    {cand.is_rescue_candidate.then(|| view! {
-                                                        <span class="epi-tag epi-tag-violet">"Carbon Rescue"</span>
-                                                    })}
-                                                    {has_bandaid.then(|| view! {
-                                                        <span class="epi-tag epi-tag-amber">"⚠ Bandaid Debt"</span>
-                                                    })}
-                                                </div>
-
-                                                <div class="epi-cand-metrics">
-                                                    <div class="epi-mini-stat">
-                                                        <span class="epi-mini-label">"Risk ↓"</span>
-                                                        <span class="epi-mini-val" style=format!("color:{risk_color};")>
-                                                            {risk.map(|v| format!("{v:.1}")).unwrap_or_else(|| "—".into())}
-                                                        </span>
-                                                    </div>
-                                                    <div class="epi-mini-stat">
-                                                        <span class="epi-mini-label">"Depth ↑"</span>
-                                                        <span class="epi-mini-val" style=format!("color:{depth_color};")>
-                                                            {depth.map(|v| format!("{v:.0}")).unwrap_or_else(|| "—".into())}
-                                                        </span>
-                                                    </div>
-                                                    <div class="epi-mini-stat">
-                                                        <span class="epi-mini-label">"Speedup"</span>
-                                                        <span class="epi-mini-val" style=format!("color:{speed_color};")>
-                                                            {speedup.map(|v| format!("{v:+.1}%")).unwrap_or_else(|| "—".into())}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </button>
-                                        }
-                                    }).collect_view()}
-                                </div>
-                            }.into_any()
-                        }}
-                    </section>
-
-                    // 2. Reactive <svg> Dual-Score / Pareto Scatter Plot
-                    {render_pareto_scatter(
-                        candidates.clone(),
-                        specs.clone(),
-                        selected_id.clone(),
-                        selected_strategy_id,
-                        hovered_scatter_id,
-                    )}
-
-                    // 3. Arena Interleaved Benchmark Bars & Sparkline
-                    {render_arena_panel(
-                        selected_candidate,
-                        candidates,
-                        arena_summary,
-                        hovered_trial_idx,
-                    )}
+                    {match subtab {
+                        PerfSubTab::TradeOff => render_pareto_scatter(
+                            candidates,
+                            specs,
+                            selected_id,
+                            selected_strategy_id,
+                            hovered_scatter_id,
+                        ).into_any(),
+                        PerfSubTab::Benchmark => render_arena_panel(
+                            selected_candidate,
+                            specs,
+                            candidates,
+                            arena_summary,
+                            hovered_trial_idx,
+                        ).into_any(),
+                    }}
                 }.into_any()
             }}
-        </div>
+        </section>
     }
 }
 
@@ -504,15 +597,9 @@ fn render_pareto_scatter(
 
     if plottable.is_empty() {
         return view! {
-            <section class="epi-panel-card">
-                <div class="epi-panel-head">
-                    <h2 class="epi-panel-title">"Dual-Score Pareto Frontier"</h2>
-                    <span class="epi-panel-sub">"Impact Risk (X) vs. Speedup % (Y) · Bubble Size = Root-Cause Depth"</span>
-                </div>
-                <div class="epi-empty-box">
-                    "Awaiting Stage 5 Arena benchmarks & Stage 6 Carbon Dual-Score audits to plot Pareto frontier…"
-                </div>
-            </section>
+            <div class="epi-empty-box">
+                "Waiting for benchmarks and risk audit to plot the risk-vs-speed trade-off..."
+            </div>
         }.into_any();
     }
 
@@ -586,16 +673,7 @@ fn render_pareto_scatter(
     let selected_id_hover = selected_id.clone();
 
     view! {
-        <section class="epi-panel-card">
-            <div class="epi-panel-head">
-                <div>
-                    <h2 class="epi-panel-title">"Dual-Score Pareto Frontier"</h2>
-                    <div class="epi-panel-sub">
-                        "X: Impact Risk (0..100, lower is safer) · Y: Speedup % · Radius & Ring: Root-Cause Depth (0..100)"
-                    </div>
-                </div>
-            </div>
-
+        <div class="epi-pareto-wrap">
             <div class="epi-svg-box">
                 <svg class="epi-svg-fluid" viewBox="0 0 640 310">
                     <defs>
@@ -617,12 +695,12 @@ fn render_pareto_scatter(
                         x=format!("{:.1}", pad_l + 8.0)
                         y=format!("{:.1}", pad_t + 14.0)
                         fill="#10b981"
-                        fill-opacity="0.72"
+                        fill-opacity="0.78"
                         font-size="9.5"
                         font-weight="700"
                         letter-spacing="0.8"
                     >
-                        "OPTIMAL QUADRANT · LOW RISK + FASTER"
+                        "SWEET SPOT · LOWER RISK & FASTER"
                     </text>
 
                     // Horizontal gridlines & Y-axis labels
@@ -704,7 +782,7 @@ fn render_pareto_scatter(
                         font-size="10.5"
                         font-weight="600"
                     >
-                        "Composite Impact Risk (0 = Safest · 100 = High Blast Risk)"
+                        "Impact Risk (0 = Safest · 100 = Highest Risk)"
                     </text>
                     <text
                         x="15"
@@ -775,7 +853,12 @@ fn render_pareto_scatter(
                         let ring_r = r + 3.5;
                         let circum = 2.0 * std::f64::consts::PI * ring_r;
                         let dash_len = circum * (depth.clamp(0.0, 100.0) / 100.0);
-                        let label = short_label(&cid, 16);
+                        let title_for_label = specs
+                            .iter()
+                            .find(|s| s.id == cid)
+                            .map(|s| s.title.as_str())
+                            .unwrap_or(cid.as_str());
+                        let label = short_label(title_for_label, 18);
 
                         let depth_ring_color = if depth >= 70.0 {
                             "#10b981"
@@ -887,40 +970,44 @@ fn render_pareto_scatter(
                             let sp = c.arena_metrics.as_ref().map(|m| m.speedup_pct).unwrap_or(0.0);
                             let util = c.dual_utility_score();
                             view! {
-                                <span style="color:#38bdf8; font-weight:700;">{format!("{title} ({})", c.strategy_id)}</span>
-                                <span>{format!("Risk {:.1} · Depth {:.0} · Speedup {:+.1}% · Dual Utility {:.1}", risk, depth, sp, util)}</span>
+                                <span style="color:#38bdf8; font-weight:700;">{title}</span>
+                                <span>{format!("Risk {:.0}/100 · Root-Cause {:.0}/100 · Speedup {:+.1}% · Score {:.1}", risk, depth, sp, util)}</span>
                             }.into_any()
                         }
                         None => view! {
-                            <span>"Hover or click any Pareto bubble to inspect its Dual-Score breakdown."</span>
+                            <span>"Hover or click any point to inspect its breakdown."</span>
                         }.into_any(),
                     }
                 }}
             </div>
-        </section>
+        </div>
     }.into_any()
 }
 
 fn render_arena_panel(
     selected_candidate: Option<CandidateResult>,
+    specs: Vec<StrategySpec>,
     all_candidates: Vec<CandidateResult>,
     arena_summary: Option<epicenter_common::ArenaSummary>,
     hovered_trial_idx: RwSignal<Option<usize>>,
 ) -> impl IntoView {
     let Some(cand) = selected_candidate else {
-        return view! { <div /> }.into_any();
+        return view! {
+            <div class="epi-empty-box">
+                "Select a candidate approach above to inspect its latency benchmark."
+            </div>
+        }.into_any();
     };
+    let cand_title = specs
+        .iter()
+        .find(|s| s.id == cand.strategy_id)
+        .map(|s| s.title.clone())
+        .unwrap_or_else(|| cand.strategy_id.clone());
     let Some(metrics) = cand.arena_metrics.clone() else {
         return view! {
-            <section class="epi-panel-card">
-                <div class="epi-panel-head">
-                    <h2 class="epi-panel-title">"Interleaved Benchmark Arena"</h2>
-                    <span class="epi-panel-sub">{cand.strategy_id}</span>
-                </div>
-                <div class="epi-empty-box">
-                    "No Arena benchmark samples recorded for this candidate yet."
-                </div>
-            </section>
+            <div class="epi-empty-box">
+                {format!("No benchmark samples recorded for \"{cand_title}\" yet.")}
+            </div>
         }.into_any();
     };
 
@@ -1025,45 +1112,40 @@ fn render_arena_panel(
         .count();
 
     view! {
-        <section class="epi-panel-card">
-            <div class="epi-panel-head">
-                <div>
-                    <h2 class="epi-panel-title">"Single-VM Interleaved Benchmark Arena"</h2>
-                    <div class="epi-panel-sub">
-                        {format!("{} · {} trials · {bench_count} benchmarked candidates", bench_name, n_trials)}
-                    </div>
-                </div>
-                <span class="epi-tag epi-tag-cyan">{cand.strategy_id.clone()}</span>
+        <div class="epi-pareto-wrap">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:#94a3b8;">
+                <span>{format!("{bench_name} · {n_trials} trials · {bench_count} benchmarked")}</span>
+                <span class="epi-tag epi-tag-cyan">{short_label(&cand_title, 28)}</span>
             </div>
 
-            // Telemetry cards
+            // Key benchmark stats
             <div class="epi-arena-telemetry">
                 <div class="epi-tele-card">
-                    <span class="epi-tele-label">"p50 Speedup"</span>
+                    <span class="epi-tele-label">"Median Speedup"</span>
                     <span class="epi-tele-val" style=format!("color:{speed_color};")>
                         {format!("{:+.1}%", metrics.speedup_pct)}
                     </span>
                     <span class="epi-tele-sub">{format!("vs {:.2} ms base", baseline_p50)}</span>
                 </div>
                 <div class="epi-tele-card">
-                    <span class="epi-tele-label">"Candidate p50"</span>
+                    <span class="epi-tele-label">"Median Latency"</span>
                     <span class="epi-tele-val" style="color:#10b981;">{format!("{:.2} ms", metrics.p50_ms)}</span>
                     <span class="epi-tele-sub">{format!("p95: {:.2} ms", metrics.p95_ms)}</span>
                 </div>
                 <div class="epi-tele-card">
                     <span class="epi-tele-label">"Peak Memory"</span>
                     <span class="epi-tele-val">{format_memory(metrics.peak_memory_kb)}</span>
-                    <span class="epi-tele-sub">"RSS high-water"</span>
+                    <span class="epi-tele-sub">"RSS peak"</span>
                 </div>
                 <div class="epi-tele-card">
-                    <span class="epi-tele-label">"Calls / Queries"</span>
+                    <span class="epi-tele-label">"Hot-Path Ops"</span>
                     <span class="epi-tele-val">
                         {metrics
                             .call_or_query_count
                             .map(|c| c.to_string())
                             .unwrap_or_else(|| "—".into())}
                     </span>
-                    <span class="epi-tele-sub">"Hot-path ops"</span>
+                    <span class="epi-tele-sub">"Calls / queries"</span>
                 </div>
             </div>
 
@@ -1127,7 +1209,7 @@ fn render_arena_panel(
                 view! {
                     <div class="epi-svg-box">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; font-size:11px; color:#94a3b8;">
-                            <span style="font-weight:700; color:#e2e8f0;">"Interleaved Trial-by-Trial Latency (ms)"</span>
+                            <span style="font-weight:700; color:#e2e8f0;">"Trial-by-Trial Latency (ms)"</span>
                             <div style="display:flex; gap:12px;">
                                 <span style="color:#f59e0b;">"--- Baseline"</span>
                                 <span style="color:#10b981;">"━━ Candidate"</span>
@@ -1243,7 +1325,7 @@ fn render_arena_panel(
                                     _ => "—".to_string(),
                                 };
                                 view! {
-                                    <span style="color:#38bdf8; font-weight:700;">{format!("Interleaved Trial #{}", idx + 1)}</span>
+                                    <span style="color:#38bdf8; font-weight:700;">{format!("Trial #{}", idx + 1)}</span>
                                     <span>{format!(
                                         "Baseline: {} · Candidate: {} · {}",
                                         b.map(|v| format!("{v:.2} ms")).unwrap_or_else(|| "—".into()),
@@ -1257,13 +1339,13 @@ fn render_arena_panel(
                                     .as_ref()
                                     .map(|s| s.summary_notes.clone())
                                     .filter(|s| !s.is_empty())
-                                    .unwrap_or_else(|| "Hover any trial point on the interleaved sparkline to inspect paired VM timings.".into());
+                                    .unwrap_or_else(|| "Hover any trial point to compare paired baseline and candidate timings.".into());
                                 view! { <span>{notes}</span> }.into_any()
                             }
                         }}
                     </div>
                 }
             })}
-        </section>
+        </div>
     }.into_any()
 }

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>EPICENTER — Gemini 4 Tournament &amp; Blast-Radius Console</title>
+    <title>EPICENTER — Implementation Testing Studio</title>
     <link data-trunk rel="rust" data-wasm-opt="0" />
     <style>
       :root {
@@ -84,24 +84,24 @@
         min-height: 100vh;
       }
 
-      /* ── Top Mission Control Header ─────────────────────────────── */
+      /* ── Top Studio Header ──────────────────────────────────────── */
       .studio-header {
         position: sticky;
         top: 0;
         z-index: 40;
-        background: rgba(8, 12, 20, 0.88);
+        background: rgba(8, 12, 20, 0.9);
         backdrop-filter: blur(12px);
         border-bottom: 1px solid var(--border);
-        padding: 12px 24px;
+        padding: 14px 28px;
       }
 
       .studio-header-inner {
-        max-width: 1600px;
+        max-width: 1520px;
         margin: 0 auto;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 16px;
+        gap: 18px;
         flex-wrap: wrap;
       }
 
@@ -126,6 +126,7 @@
       .brand-title-group {
         display: flex;
         flex-direction: column;
+        gap: 2px;
       }
 
       .brand-wordmark {
@@ -138,41 +139,16 @@
       }
 
       .brand-sub {
-        font-size: 11px;
+        font-size: 12px;
         color: var(--text-muted);
-        letter-spacing: 0.04em;
-      }
-
-      .model-lineup {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        flex-wrap: wrap;
-      }
-
-      .model-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 4px 9px;
-        border-radius: 999px;
-        font-size: 11px;
-        font-family: var(--font-mono);
-        background: var(--panel);
-        border: 1px solid var(--border);
-        color: var(--text-muted);
-        white-space: nowrap;
-      }
-
-      .model-pill strong {
-        color: var(--text);
-        font-weight: 600;
+        letter-spacing: 0.02em;
       }
 
       .model-dot {
         width: 6px;
         height: 6px;
         border-radius: 50%;
+        flex-shrink: 0;
       }
       .dot-cyan { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
       .dot-violet { background: var(--violet); box-shadow: 0 0 6px var(--violet); }
@@ -261,27 +237,27 @@
       .studio-main {
         flex: 1;
         width: 100%;
-        max-width: 1600px;
+        max-width: 1520px;
         margin: 0 auto;
-        padding: 20px 24px 48px;
+        padding: 24px 28px 56px;
         display: flex;
         flex-direction: column;
-        gap: 18px;
+        gap: 22px;
       }
 
       .panel {
         background: var(--panel);
         border: 1px solid var(--border);
         border-radius: var(--radius);
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
       }
 
       .panel-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        padding: 14px 18px;
+        gap: 14px;
+        padding: 16px 22px;
         border-bottom: 1px solid var(--border);
         flex-wrap: wrap;
       }
@@ -291,19 +267,20 @@
         align-items: center;
         gap: 8px;
         margin: 0;
-        font-size: 14px;
+        font-size: 15px;
         font-weight: 700;
-        letter-spacing: 0.02em;
-        color: #f1f5f9;
+        letter-spacing: 0.01em;
+        color: #f8fafc;
       }
 
       .panel-subtitle {
-        font-size: 12px;
+        font-size: 12.5px;
         color: var(--text-muted);
+        margin-top: 2px;
       }
 
       .panel-body {
-        padding: 18px;
+        padding: 20px 22px;
       }
 
       /* ── Buttons & Form Controls ────────────────────────────────── */
@@ -915,7 +892,7 @@
       .analysis-split {
         display: grid;
         grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-        gap: 18px;
+        gap: 22px;
         align-items: start;
       }
 
@@ -927,7 +904,7 @@
       .briefing-grid {
         display: grid;
         grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.38fr);
-        gap: 18px;
+        gap: 22px;
       }
 
       .audio-player-box {

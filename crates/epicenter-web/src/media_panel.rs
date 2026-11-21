@@ -49,7 +49,6 @@ fn render_attachment_card(
     let mime_type = att.mime_type.clone();
     let size_text = format_bytes(att.size_bytes);
     let (kind_label, kind_cls) = media_kind_meta(att.media_kind);
-    let has_file_uri = att.file_uri.is_some();
 
     let media_body = match att.media_kind {
         MediaKind::Screenshot => view! {
@@ -91,19 +90,19 @@ fn render_attachment_card(
                     {move || match keyframes_cache.get().get(&att_id).cloned() {
                         Some(KeyframeFetchState::Loading) | None => view! {
                             <div class="keyframe-status">
-                                "Fetching timestamped keyframes from /api/attachments/{id}/keyframes..."
+                                "Extracting video keyframes..."
                             </div>
                         }
                         .into_any(),
-                        Some(KeyframeFetchState::Error(err)) => view! {
+                        Some(KeyframeFetchState::Error(_)) => view! {
                             <div class="keyframe-status">
-                                {format!("Keyframe strip unavailable ({err}) — full video remains playable above.")}
+                                "Keyframe previews unavailable — full video remains playable above."
                             </div>
                         }
                         .into_any(),
                         Some(KeyframeFetchState::Ready(frames)) if frames.is_empty() => view! {
                             <div class="keyframe-status">
-                                "No discrete keyframes returned for this clip — inspect the full video player above."
+                                "No discrete keyframes returned — use the video player above."
                             </div>
                         }
                         .into_any(),
@@ -179,9 +178,6 @@ fn render_attachment_card(
                     <span class="mono evidence-filename" title=filename_title>{filename}</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-                    {has_file_uri.then(|| view! {
-                        <span class="badge badge-emerald" title="Synced with Gemini Files API">"Files API"</span>
-                    })}
                     <span class="mono" style="font-size:11px;color:var(--text-dim);">{size_text}</span>
                     <a
                         href=open_url
@@ -189,9 +185,9 @@ fn render_attachment_card(
                         rel="noopener noreferrer"
                         class="mono"
                         style="font-size:11px;"
-                        title="Open raw attachment endpoint"
+                        title="Open file in new tab"
                     >
-                        "Raw ↗"
+                        "Open ↗"
                     </a>
                 </div>
             </div>
@@ -300,29 +296,34 @@ pub fn MultimodalEvidencePanel(session: Signal<Option<TournamentSession>>) -> im
                 <div>
                     <h2 class="panel-title">
                         <span class="model-dot dot-cyan"></span>
-                        "Multimodal Evidence & Hydrogen Findings"
-                        <span class="badge badge-cyan">"Stage 1 Intake"</span>
+                        "Attached Evidence & Findings"
                     </h2>
                     <div class="panel-subtitle">
-                        "Original screenshots, screen recordings, extracted video keyframes, and voice notes paired with Gemini 4 Hydrogen's extracted symbols and repro contract."
+                        "Uploaded media alongside extracted clues, relevant files, and reproduction steps."
                     </div>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                     <span class="badge">
-                        {move || format!("{} attachment(s)", attachments_memo.get().len())}
+                        {move || {
+                            let n = attachments_memo.get().len();
+                            if n == 1 { "1 attachment".to_string() } else { format!("{n} attachments") }
+                        }}
                     </span>
                     <span class="badge badge-cyan">
-                        {move || format!("{} finding(s)", findings_memo.get().len())}
+                        {move || {
+                            let n = findings_memo.get().len();
+                            if n == 1 { "1 finding".to_string() } else { format!("{n} findings") }
+                        }}
                     </span>
                 </div>
             </div>
 
             <div class="panel-body">
                 <div class="media-evidence-grid">
-                    // Left column: Captured Visual / Video / Audio Evidence
+                    // Left column: Uploaded Media
                     <div class="evidence-col">
                         <div class="evidence-col-header">
-                            <span class="field-label" style="margin:0;">"Captured Visual / Video / Audio Evidence"</span>
+                            <span class="field-label" style="margin:0;">"Uploaded Media"</span>
                         </div>
 
                         {move || {
@@ -330,7 +331,7 @@ pub fn MultimodalEvidencePanel(session: Signal<Option<TournamentSession>>) -> im
                             if items.is_empty() {
                                 view! {
                                     <div class="empty-state" style="padding:22px 16px;">
-                                        "No binary media attachments stored on this session — Hydrogen findings on the right were synthesized from the prompt and repository context."
+                                        "No media attached — findings were extracted from the issue description and repository."
                                     </div>
                                 }
                                 .into_any()
@@ -348,11 +349,11 @@ pub fn MultimodalEvidencePanel(session: Signal<Option<TournamentSession>>) -> im
                         }}
                     </div>
 
-                    // Right column: Gemini 4 Hydrogen Multimodal Findings & Derived Repro Contract
+                    // Right column: Extracted Findings & Reproduction Plan
                     <div class="evidence-col">
                         <div class="evidence-col-header">
                             <span class="field-label" style="margin:0;">
-                                "Gemini 4 Hydrogen Multimodal Findings & Derived Repro Contract"
+                                "Extracted Findings & Reproduction Plan"
                             </span>
                         </div>
 
@@ -361,7 +362,7 @@ pub fn MultimodalEvidencePanel(session: Signal<Option<TournamentSession>>) -> im
                             if findings.is_empty() {
                                 view! {
                                     <div class="empty-state" style="padding:20px 16px;">
-                                        "Awaiting Gemini 4 Hydrogen multimodal extraction (visual error traces, symbols, and timestamps)..."
+                                        "Analyzing attached media and issue context..."
                                     </div>
                                 }
                                 .into_any()
@@ -382,7 +383,7 @@ pub fn MultimodalEvidencePanel(session: Signal<Option<TournamentSession>>) -> im
                             let suspects = suspect_files_memo.get();
                             (!suspects.is_empty()).then(|| view! {
                                 <div class="repro-contract-block">
-                                    <span class="field-label">"Suspect Files"</span>
+                                    <span class="field-label">"Relevant Files"</span>
                                     <div class="suspect-files-row">
                                         {suspects
                                             .into_iter()
@@ -399,7 +400,7 @@ pub fn MultimodalEvidencePanel(session: Signal<Option<TournamentSession>>) -> im
                             let steps = repro_steps_memo.get();
                             (!steps.is_empty()).then(|| view! {
                                 <div class="repro-contract-block">
-                                    <span class="field-label">"Derived Reproduction Steps"</span>
+                                    <span class="field-label">"Reproduction Steps"</span>
                                     <ol class="repro-steps-list">
                                         {steps
                                             .into_iter()
