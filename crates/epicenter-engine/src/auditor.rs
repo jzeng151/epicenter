@@ -1,3 +1,4 @@
+use crate::intake::format_multimodal_findings;
 use crate::repo::{emit_event, emit_log, extract_json_from_text, truncate_str, RepoSnapshot};
 use epicenter_common::{
     compute_pareto_frontier, crown_candidate_badges, BlastRadiusReport, CandidateStatus,
@@ -44,11 +45,12 @@ fn default_severity() -> HazardSeverity {
     HazardSeverity::Medium
 }
 
-/// Stage 6: 3-Layer Blast-Radius Impact & `Gemini4Model::Carbon` Dual-Score Auditor.
+/// Stage 6: 3-Layer Blast-Radius Impact & Concurrent `Gemini4Model::Carbon` Dual-Score Auditor.
 ///
 /// Layer 1: Deterministic AST + Reverse Call-Graph (`RepoCallGraph::from_sources` -> Ring 0/1/2).
 /// Layer 2: Per-candidate Test Coverage Dark-Zone Overlay (`CoverageMap`).
-/// Layer 3: `Gemini4Model::Carbon` Semantic Hazard + Root-Cause Depth (`0..=100`) & Bandaid Debt audit.
+/// Layer 3: Concurrent `Gemini4Model::Carbon` Semantic Hazard + Root-Cause Depth (`0..=100`) &
+/// Bandaid Debt audit via `futures::future::join_all`, checking multimodal visual/audio findings.
 ///
 /// Recomputes `composite_risk_score`, runs `compute_pareto_frontier` and `crown_candidate_badges`,
 /// and returns the recommended `BestOverall` strategy ID.
@@ -67,7 +69,7 @@ pub async fn run_auditor_stage(
             session_id: session.id,
             stage: TournamentStage::Auditing,
             message: format!(
-                "Stage 6 — 3-Layer Blast-Radius & Carbon Dual-Score audit ({} candidates, {} source files)",
+                "Stage 6 — 3-Layer Blast-Radius & concurrent Carbon Dual-Score audit ({} candidates, {} source files)",
                 session.candidates.len(),
                 repo.sources.len()
             ),
@@ -90,38 +92,63 @@ pub async fn run_auditor_stage(
 
     let issue_title = session.intake.title.clone();
     let problem_statement = session.intake.problem_statement.clone();
+    let multimodal_block = format_multimodal_findings(&session.intake.multimodal_findings);
     let session_id = session.id;
 
-    for cand in &mut session.candidates {
+    // Layers 1 & 2 (deterministic): build structural + coverage blast-radius reports for every candidate.
+    struct PendingAudit {
+        cand_idx: usize,
+        strategy_id: String,
+        tier: StrategyDepthTier,
+        added_caller_tests: bool,
+        git_diff: String,
+        report: BlastRadiusReport,
+        base_structural_score: f32,
+    }
+
+    let mut pending: Vec<PendingAudit> = Vec::new();
+    for (idx, cand) in session.candidates.iter().enumerate() {
         if cand.git_diff.trim().is_empty() {
             continue;
         }
-
         let cov = coverage_maps.get(&cand.strategy_id);
-        let mut report: BlastRadiusReport = graph.analyze_diff(&cand.git_diff, cov, &blast_cfg);
+        let report = graph.analyze_diff(&cand.git_diff, cov, &blast_cfg);
         let base_structural_score = report.composite_risk_score;
-
         let tier = strategy_tiers
             .get(&cand.strategy_id)
             .copied()
             .unwrap_or_default();
+        pending.push(PendingAudit {
+            cand_idx: idx,
+            strategy_id: cand.strategy_id.clone(),
+            tier,
+            added_caller_tests: cand.added_caller_tests,
+            git_diff: cand.git_diff.clone(),
+            report,
+            base_structural_score,
+        });
+    }
 
-        // Layer 3: Gemini 4 Carbon semantic hazard & root-cause depth audit
-        let audit_out = run_carbon_semantic_audit(
+    // Layer 3: Run Gemini 4 Carbon semantic hazard & root-cause depth audits CONCURRENTLY!
+    let audit_futs = pending.iter().map(|item| {
+        run_carbon_semantic_audit(
             gemini,
             &issue_title,
             &problem_statement,
-            &cand.strategy_id,
-            tier,
-            cand.added_caller_tests,
-            &cand.git_diff,
-            &report,
+            &multimodal_block,
+            &item.strategy_id,
+            item.tier,
+            item.added_caller_tests,
+            &item.git_diff,
+            &item.report,
         )
-        .await;
+    });
+    let audit_results = futures::future::join_all(audit_futs).await;
 
+    for (mut item, audit_out) in pending.into_iter().zip(audit_results.into_iter()) {
         match audit_out {
             Ok(out) => {
-                report.semantic_hazards = out
+                item.report.semantic_hazards = out
                     .semantic_hazards
                     .into_iter()
                     .filter(|h| !h.explanation.trim().is_empty())
@@ -133,7 +160,7 @@ pub async fn run_auditor_stage(
                             h.category
                         },
                         symbol: if h.symbol.trim().is_empty() {
-                            report
+                            item.report
                                 .ring0_mutated
                                 .first()
                                 .map(|n| n.symbol.clone())
@@ -145,31 +172,38 @@ pub async fn run_auditor_stage(
                         mitigation: h.mitigation,
                     })
                     .collect();
-                report.root_cause_depth_score = out.root_cause_depth_score.clamp(0.0, 100.0);
-                report.bandaid_debt_warning = out
+                item.report.root_cause_depth_score = out.root_cause_depth_score.clamp(0.0, 100.0);
+                item.report.bandaid_debt_warning = out
                     .bandaid_debt_warning
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty());
-                report.recalculate_composite_risk(base_structural_score);
+                item.report
+                    .recalculate_composite_risk(item.base_structural_score);
             }
             Err(err) => {
-                warn!(strategy = %cand.strategy_id, error = %err, "Carbon semantic audit fallback");
+                warn!(strategy = %item.strategy_id, error = %err, "Carbon semantic audit fallback");
                 emit_log(
                     event_tx,
                     session_id,
                     LogLevel::Warn,
-                    format!("auditor:{}", cand.strategy_id),
+                    format!("auditor:{}", item.strategy_id),
                     format!("Carbon audit fallback ({err}); using structural Dual-Score heuristic"),
                 );
-                apply_structural_dual_score_fallback(&mut report, tier, cand.added_caller_tests);
-                report.recalculate_composite_risk(base_structural_score);
+                apply_structural_dual_score_fallback(
+                    &mut item.report,
+                    item.tier,
+                    item.added_caller_tests,
+                );
+                item.report
+                    .recalculate_composite_risk(item.base_structural_score);
             }
         }
 
-        let hazards = report.semantic_hazards.clone();
-        let composite_risk = report.composite_risk_score;
+        let hazards = item.report.semantic_hazards.clone();
+        let composite_risk = item.report.composite_risk_score;
 
-        cand.blast_radius = Some(report.clone());
+        let cand = &mut session.candidates[item.cand_idx];
+        cand.blast_radius = Some(item.report.clone());
         if cand.is_green() {
             cand.status = CandidateStatus::Audited;
         }
@@ -179,7 +213,7 @@ pub async fn run_auditor_stage(
             LiveEvent::BlastRadiusReady {
                 session_id,
                 strategy_id: cand.strategy_id.clone(),
-                report: Box::new(report),
+                report: Box::new(item.report),
             },
         );
         emit_event(
@@ -233,6 +267,7 @@ async fn run_carbon_semantic_audit(
     gemini: &GeminiClient,
     issue_title: &str,
     problem_statement: &str,
+    multimodal_block: &str,
     strategy_id: &str,
     tier: StrategyDepthTier,
     added_caller_tests: bool,
@@ -246,18 +281,20 @@ async fn run_carbon_semantic_audit(
     let prompt = format!(
         "You are Stage 6 (Layer-3 Semantic Hazard & Dual-Score Auditor) powered by Gemini 4 Carbon.\n\
          Evaluate candidate `{strategy_id}` (depth tier: `{tier:?}`, added_caller_tests: {added_caller_tests})\n\
-         against the problem statement and concentric blast-radius graph below.\n\n\
+         against the problem statement, multimodal visual/audio findings, and concentric blast-radius graph below.\n\n\
          DUAL-SCORE RUBRIC:\n\
          1. `semantic_hazards`: hidden behavioral regressions, concurrency/race conditions, cache staleness,\n\
-            unchecked null/error contract changes, or security flaws affecting Ring 1 / Ring 2 callers.\n\
+            unchecked null/error contract changes, unresolved multimodal visual/audio symptoms, or security\n\
+            flaws affecting Ring 1 / Ring 2 callers.\n\
          2. `root_cause_depth_score` (0.0..=100.0):\n\
-            - 80..=100: Cures the underlying upstream invariant cleanly with durable architecture.\n\
+            - 80..=100: Cures the underlying upstream invariant cleanly with durable architecture and resolves all reported visual/audio symptoms.\n\
             - 50..=79: Solid targeted fix/optimization that addresses core logic.\n\
             - 0..=49: Symptom-only guard/bandaid that masks the defect downstream and stacks tech debt.\n\
          3. `bandaid_debt_warning`: null if root_cause_depth_score >= 60, otherwise a crisp 1-sentence\n\
             warning explaining what upstream invariant debt remains.\n\n\
          Issue Title: {issue_title}\n\
          Problem Statement:\n{problem_statement}\n\n\
+         MULTIMODAL FINDINGS (verify whether this candidate resolves every visual/audio symptom):\n{multimodal_block}\n\n\
          STRUCTURAL BLAST RADIUS:\n\
          - Ring 0 (Mutated): {ring0_summary}\n\
          - Ring 1 (Direct Callers): {ring1_summary}\n\
@@ -273,7 +310,7 @@ async fn run_carbon_semantic_audit(
 
     let mut req = CreateInteractionRequest::for_model(Gemini4Model::Carbon, prompt);
     req.system_instruction = Some(
-        "You are Gemini 4 Carbon, a Principal SRE & Security Auditor. Be razor-sharp, objective, and return strict JSON."
+        "You are Gemini 4 Carbon, a Principal SRE & Security Auditor. Be razor-sharp, objective, verify multimodal findings, and return strict JSON."
             .to_string(),
     );
     req.response_format = Some(ResponseFormat::json_schema(carbon_audit_schema()));
@@ -294,7 +331,11 @@ fn summarize_nodes(nodes: &[epicenter_common::GraphNode]) -> String {
                 Some(pct) => format!("{pct:.0}%"),
                 None => "unknown".to_string(),
             };
-            let dz = if n.is_untested_dark_zone { " [DARK ZONE]" } else { "" };
+            let dz = if n.is_untested_dark_zone {
+                " [DARK ZONE]"
+            } else {
+                ""
+            };
             format!("{} ({}:{}, cov={}{})", n.symbol, n.file_path, n.line, cov, dz)
         })
         .collect::<Vec<_>>()
