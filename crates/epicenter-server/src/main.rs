@@ -4,6 +4,9 @@ pub mod live_judge;
 pub mod routes;
 pub mod state;
 
+#[cfg(test)]
+mod tests;
+
 use anyhow::Result;
 use db::DbStore;
 use routes::build_router;
