@@ -102,6 +102,13 @@ pub struct BlastRadiusReport {
     /// Optional warning emitted by Carbon when a candidate is a symptom-only bandaid that stacks tech debt.
     #[serde(default)]
     pub bandaid_debt_warning: Option<String>,
+    /// Calibrated `noul` probability (`0.0..=1.0`) from `gemini-decision-1` that the patch masks
+    /// symptoms rather than curing the underlying root-cause invariant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandaid_probability: Option<f32>,
+    /// Mean calibrated confidence (`0.0..=1.0`) reported by `gemini-decision-1` on this audit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_confidence: Option<f32>,
 }
 
 impl Default for BlastRadiusReport {
@@ -115,6 +122,8 @@ impl Default for BlastRadiusReport {
             composite_risk_score: 0.0,
             root_cause_depth_score: 50.0,
             bandaid_debt_warning: None,
+            bandaid_probability: None,
+            decision_confidence: None,
         }
     }
 }

@@ -227,6 +227,20 @@ pub fn build_rich_export_bundle(
             br.composite_risk_score
         );
         let _ = writeln!(md, "| Untested Dark-Zone Callers | `{}` |", br.dark_zone_count());
+        if let Some(bandaid_prob) = br.bandaid_probability {
+            let _ = writeln!(
+                md,
+                "| Band-Aid Probability | `{:.1}%` (calibrated `gemini-decision-1`) |",
+                bandaid_prob * 100.0
+            );
+        }
+        if let Some(confidence) = br.decision_confidence {
+            let _ = writeln!(
+                md,
+                "| Decision Confidence | `{:.1}%` (calibrated `gemini-decision-1`) |",
+                confidence * 100.0
+            );
+        }
     }
     if let Some(ref arena) = cand.arena_metrics {
         let _ = writeln!(md, "| Arena p50 Latency | `{:.2} ms` |", arena.p50_ms);

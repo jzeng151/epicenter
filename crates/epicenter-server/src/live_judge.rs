@@ -9,10 +9,14 @@ use anyhow::{bail, Result};
 use chrono::Utc;
 use epicenter_common::{
     ArmOutcome, AttachmentMeta, BlastRadiusReport, CreateSessionRequest, EvalArm, EvalIssueCase,
-    EvalScorecard, EvalSplit, FiveSigmaEval, LiveEvent, LiveJudgeArmProgress, LiveJudgeJobState,
-    LiveJudgeJobStatusResponse, LiveJudgePrRequest, LiveJudgePrResponse, TaskKind, TournamentStage,
+    EvalScorecard, EvalSplit, FiveSigmaEval, GraphNode, HazardSeverity, LiveEvent,
+    LiveJudgeArmProgress, LiveJudgeJobState, LiveJudgeJobStatusResponse, LiveJudgePrRequest,
+    LiveJudgePrResponse, SemanticHazard, TaskKind, TournamentStage,
 };
 use epicenter_engine::{EngineRunOptions, TournamentEngine, UploadedAttachmentBytes};
+use epicenter_gemini::{
+    CreateDecisionRequest, DecisionQuestion, DecisionResponse, GeminiClient,
+};
 use epicenter_graph::{
     normalize_rel_path, parse_unified_diff as parse_graph_diff, BlastAnalysisConfig, RepoCallGraph,
 };
@@ -36,6 +40,20 @@ const TEST_EXEC_TIMEOUT_SECS: u64 = 60;
 const MEDIA_DOWNLOAD_TIMEOUT_SECS: u64 = 15;
 const MAX_MEDIA_DOWNLOAD_BYTES: usize = 15 * 1024 * 1024;
 const MAX_MEDIA_ATTACHMENTS: usize = 6;
+const DECISIONS_PREFLIGHT_TIMEOUT_SECS: u64 = 10;
+const DECISIONS_CALIBRATION_TIMEOUT_SECS: u64 = 12;
+const LOW_SPEC_CLARITY_THRESHOLD: f64 = 0.30;
+const HIGH_REGRESSION_HAZARD_THRESHOLD: f64 = 0.78;
+const MEDIUM_REGRESSION_HAZARD_THRESHOLD: f64 = 0.58;
+const BANDAID_WARNING_THRESHOLD: f64 = 0.65;
+
+/// Calibrated pre-flight PR specification clarity signal from `gemini-decision-1`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrSpecClaritySignal {
+    pub has_actionable_spec: f64,
+    pub is_self_contained: f64,
+    pub confidence: Option<f64>,
+}
 
 /// Independent host verification verdict for a candidate patch evaluated against a PR's
 /// hidden `ground_truth_test_patch` and module regression suite.
@@ -351,6 +369,9 @@ async fn evaluate_fetched_pr_tracked(
         split: EvalSplit::LiveJudge,
     };
 
+    // Fast (<250ms typical, 10s max, non-fatal) pre-flight PR spec clarity triage via gemini-decision-1.
+    let spec_clarity = evaluate_pr_spec_clarity(state.engine.gemini.as_ref(), &ctx).await;
+
     // Run all 3 arms concurrently instead of sequentially!
     let (arm1_outcome, arm2_outcome, arm3_outcome) = tokio::join!(
         run_arm1_single_model(state, &case_id, &ctx, &problem_statement, job_id),
@@ -359,7 +380,10 @@ async fn evaluate_fetched_pr_tracked(
     );
 
     let cases = vec![issue_case];
-    let outcomes = vec![arm1_outcome, arm2_outcome, arm3_outcome];
+    let mut outcomes = vec![arm1_outcome, arm2_outcome, arm3_outcome];
+    if let Some(clarity) = spec_clarity {
+        apply_spec_clarity_note_to_failed_arms(&mut outcomes, &clarity);
+    }
     let scorecard = EvalScorecard::from_outcomes(&cases, &outcomes);
 
     let mut remaining_failure_modes = Vec::new();
@@ -421,13 +445,24 @@ async fn run_arm1_single_model(
                 "Running withheld PR tests on host worktree…",
                 None,
             );
-            let verdict = verify_candidate_on_host(
+            let mut verdict = verify_candidate_on_host(
                 &ctx.repo_url,
                 &ctx.parent_commit,
                 &diff,
                 &ctx.ground_truth_test_patch,
             )
             .await;
+            if verdict.patch_applied {
+                if let Some(ref mut blast) = verdict.blast_radius {
+                    calibrate_blast_radius_with_decisions(
+                        state.engine.gemini.as_ref(),
+                        problem_statement,
+                        &diff,
+                        blast,
+                    )
+                    .await;
+                }
+            }
             let duration_ms = start.elapsed().as_millis() as u64;
             outcome_from_verdict(
                 case_id,
@@ -491,13 +526,24 @@ async fn run_arm2_single_agent(
                 "Running withheld PR tests on host worktree…",
                 None,
             );
-            let verdict = verify_candidate_on_host(
+            let mut verdict = verify_candidate_on_host(
                 &ctx.repo_url,
                 &ctx.parent_commit,
                 &diff,
                 &ctx.ground_truth_test_patch,
             )
             .await;
+            if verdict.patch_applied {
+                if let Some(ref mut blast) = verdict.blast_radius {
+                    calibrate_blast_radius_with_decisions(
+                        state.engine.gemini.as_ref(),
+                        problem_statement,
+                        &diff,
+                        blast,
+                    )
+                    .await;
+                }
+            }
             let duration_ms = start.elapsed().as_millis() as u64;
             outcome_from_verdict(
                 case_id,
@@ -666,7 +712,7 @@ async fn run_arm3_tournament(
 
             // Independently verify the tournament winner on host against the hidden ground-truth
             // test patch and module regression suite — NEVER trust self-reported cand.is_green().
-            let verdict = verify_candidate_on_host(
+            let mut verdict = verify_candidate_on_host(
                 &ctx.repo_url,
                 &ctx.parent_commit,
                 &cand.git_diff,
@@ -674,12 +720,24 @@ async fn run_arm3_tournament(
             )
             .await;
 
-            let duration_ms = start.elapsed().as_millis() as u64;
             let speedup_pct = cand.arena_metrics.as_ref().map(|m| m.speedup_pct);
             let semantic_root_cause_depth = cand
                 .blast_radius
                 .as_ref()
                 .map(|b| b.root_cause_depth_score);
+            if semantic_root_cause_depth.is_none() && verdict.patch_applied {
+                if let Some(ref mut blast) = verdict.blast_radius {
+                    calibrate_blast_radius_with_decisions(
+                        state.engine.gemini.as_ref(),
+                        problem_statement,
+                        &cand.git_diff,
+                        blast,
+                    )
+                    .await;
+                }
+            }
+
+            let duration_ms = start.elapsed().as_millis() as u64;
             let note_prefix = format!(
                 "Winner '{}' ({} candidates evaluated)",
                 cand.strategy_id,
@@ -2307,4 +2365,592 @@ fn build_problem_statement(ctx: &FetchedPrContext) -> String {
         }
     }
     prompt
+}
+
+fn truncate_head(s: &str, max_chars: usize) -> String {
+    let trimmed = s.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(max_chars).collect();
+    format!("{head}...")
+}
+
+fn summarize_blast_nodes(nodes: &[GraphNode]) -> String {
+    const MAX_SUMMARY_NODES: usize = 12;
+    if nodes.is_empty() {
+        return "(none)".to_string();
+    }
+    let mut summary = nodes
+        .iter()
+        .take(MAX_SUMMARY_NODES)
+        .map(|n| {
+            let dz = if n.is_untested_dark_zone {
+                " [DARK ZONE]"
+            } else {
+                ""
+            };
+            format!("{} ({}:{}{})", n.symbol, n.file_path, n.line, dz)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    if nodes.len() > MAX_SUMMARY_NODES {
+        let extra = nodes.len() - MAX_SUMMARY_NODES;
+        summary.push_str(&format!(", ... (+{extra} more)"));
+    }
+    summary
+}
+
+/// Builds a `gemini-decision-1` pre-flight PR spec clarity triage request over PR title, body,
+/// and modified source file paths.
+pub fn build_pr_spec_clarity_request(
+    title: &str,
+    body: &str,
+    modified_source_files: &[String],
+) -> CreateDecisionRequest {
+    let files_list = if modified_source_files.is_empty() {
+        "(none listed)".to_string()
+    } else {
+        modified_source_files
+            .iter()
+            .take(25)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let body_block = if body.trim().is_empty() {
+        "(No PR description body provided.)".to_string()
+    } else {
+        truncate_head(body, 4_000)
+    };
+    let input = format!(
+        "PR Title: {title}\n\nPR Description:\n{body_block}\n\nModified Source Files: {files_list}"
+    );
+    CreateDecisionRequest::new(input)
+        .with_question(
+            "has_actionable_spec",
+            DecisionQuestion::noul(
+                "Does this PR title and description provide enough concrete behavioral detail for an engineer to implement the expected fix without seeing the code diff?",
+            ),
+        )
+        .with_question(
+            "is_self_contained",
+            DecisionQuestion::noul(
+                "Can this fix likely be verified by standalone unit tests without external databases, Docker services, or live browsers?",
+            ),
+        )
+}
+
+/// Parses a `gemini-decision-1` pre-flight spec clarity response into a `PrSpecClaritySignal`.
+pub fn parse_pr_spec_clarity_response(resp: &DecisionResponse) -> Option<PrSpecClaritySignal> {
+    let has_actionable_spec = resp.noul_prob("has_actionable_spec")?;
+    let is_self_contained = resp.noul_prob("is_self_contained").unwrap_or(0.5);
+    let confs: Vec<f64> = ["has_actionable_spec", "is_self_contained"]
+        .into_iter()
+        .filter_map(|k| resp.confidence(k))
+        .collect();
+    let confidence = if confs.is_empty() {
+        None
+    } else {
+        Some(confs.iter().sum::<f64>() / confs.len() as f64)
+    };
+    Some(PrSpecClaritySignal {
+        has_actionable_spec,
+        is_self_contained,
+        confidence,
+    })
+}
+
+/// Appends a concise spec-clarity caveat to failed arm outcomes when `has_actionable_spec < 0.30`.
+pub fn apply_spec_clarity_note_to_failed_arms(
+    outcomes: &mut [ArmOutcome],
+    clarity: &PrSpecClaritySignal,
+) {
+    if clarity.has_actionable_spec >= LOW_SPEC_CLARITY_THRESHOLD {
+        return;
+    }
+    let caveat = format!(
+        "Low PR spec clarity ({:.0}%)",
+        (clarity.has_actionable_spec * 100.0).clamp(0.0, 100.0)
+    );
+    for outcome in outcomes.iter_mut() {
+        if !outcome.resolved_ground_truth || !outcome.regression_free {
+            match &mut outcome.notes {
+                Some(existing) if !existing.trim().is_empty() => {
+                    existing.push_str(" | ");
+                    existing.push_str(&caveat);
+                }
+                slot => {
+                    *slot = Some(caveat.clone());
+                }
+            }
+        }
+    }
+}
+
+async fn evaluate_pr_spec_clarity(
+    gemini: Option<&GeminiClient>,
+    ctx: &FetchedPrContext,
+) -> Option<PrSpecClaritySignal> {
+    let client = gemini?;
+    let req = build_pr_spec_clarity_request(&ctx.title, &ctx.body, &ctx.modified_source_files);
+    match tokio::time::timeout(
+        Duration::from_secs(DECISIONS_PREFLIGHT_TIMEOUT_SECS),
+        client.evaluate_decisions(&req),
+    )
+    .await
+    {
+        Ok(Ok(resp)) => {
+            let signal = parse_pr_spec_clarity_response(&resp);
+            if let Some(sig) = signal {
+                info!(
+                    pr = %format!("{}/{}#{}", ctx.slug.owner, ctx.slug.repo, ctx.slug.number),
+                    has_actionable_spec = sig.has_actionable_spec,
+                    is_self_contained = sig.is_self_contained,
+                    confidence = ?sig.confidence,
+                    "pre-flight PR spec clarity triage completed via gemini-decision-1"
+                );
+            }
+            signal
+        }
+        Ok(Err(err)) => {
+            warn!(%err, "pre-flight PR spec clarity triage failed (non-fatal fallback)");
+            None
+        }
+        Err(_) => {
+            warn!(
+                timeout_secs = DECISIONS_PREFLIGHT_TIMEOUT_SECS,
+                "pre-flight PR spec clarity triage timed out (non-fatal fallback)"
+            );
+            None
+        }
+    }
+}
+
+/// Builds the calibrated `gemini-decision-1` 5-level root-cause & regression hazard request
+/// over the problem statement, candidate diff, and structural Ring 0/1/2 blast-radius summary.
+pub fn build_blast_calibration_request(
+    problem_statement: &str,
+    candidate_diff: &str,
+    blast: &BlastRadiusReport,
+) -> CreateDecisionRequest {
+    let ring0 = summarize_blast_nodes(&blast.ring0_mutated);
+    let ring1 = summarize_blast_nodes(&blast.ring1_direct_callers);
+    let ring2 = summarize_blast_nodes(&blast.ring2_transitive_entrypoints);
+    let input = format!(
+        "PROBLEM STATEMENT:\n{}\n\n\
+         STRUCTURAL BLAST RADIUS:\n\
+         - Ring 0 (Mutated): {ring0}\n\
+         - Ring 1 (Direct Callers): {ring1}\n\
+         - Ring 2 (Transitive Entrypoints): {ring2}\n\
+         - Untested Dark Zones: {}\n\
+         - Base Structural Risk Score: {:.1}\n\n\
+         CANDIDATE DIFF:\n```diff\n{}\n```",
+        truncate_head(problem_statement, 2_500),
+        blast.dark_zone_count(),
+        blast.composite_risk_score,
+        truncate_head(candidate_diff, 8_000),
+    );
+
+    CreateDecisionRequest::new(input)
+        .with_question(
+            "root_cause_quality",
+            DecisionQuestion::score(
+                "Rate how deeply and cleanly this candidate diff cures the underlying root cause of the reported issue rather than masking symptoms.",
+                [
+                    "Incorrect or superficial patch that fails to address the defect or introduces clear breakage",
+                    "Symptom-only bandaid or narrow downstream guard that leaves the underlying root-cause invariant broken",
+                    "Partial fix that handles the reported case but misses related edge cases or caller assumptions",
+                    "Solid targeted fix that corrects the core defect logic cleanly without disturbing caller contracts",
+                    "Comprehensive architectural root-cause cure that restores the upstream invariant cleanly across callers and edge cases",
+                ],
+            ),
+        )
+        .with_question(
+            "is_symptom_bandaid",
+            DecisionQuestion::noul(
+                "Does this candidate diff merely mask symptoms with a narrow downstream guard or bandaid instead of curing the underlying root-cause invariant?",
+            ),
+        )
+        .with_question(
+            "regression_hazard",
+            DecisionQuestion::noul(
+                "Does this candidate diff pose a meaningful risk of causing behavioral regressions, contract breakages, or subtle side effects for Ring 1 or Ring 2 callers?",
+            ),
+        )
+}
+
+/// Pure calibration mapping from a `gemini-decision-1` `DecisionResponse` onto a `BlastRadiusReport`.
+///
+/// Updates `root_cause_depth_score`, `bandaid_probability`, `decision_confidence`, appends a
+/// calibrated `SemanticHazard` when `regression_hazard >= 0.58` (`High` if `>= 0.78`, else `Medium`),
+/// and recalculates `composite_risk_score`. Returns `true` if any calibration field was applied.
+pub fn apply_decision_calibration_to_blast_radius(
+    resp: &DecisionResponse,
+    blast: &mut BlastRadiusReport,
+) -> bool {
+    let existing_hazard_penalty: f32 = blast
+        .semantic_hazards
+        .iter()
+        .map(|h| h.severity.risk_weight())
+        .sum();
+    let base_score = (blast.composite_risk_score - existing_hazard_penalty).clamp(0.0, 100.0);
+
+    let mut applied = false;
+
+    if let Some(depth_score) = resp.score_normalized_100("root_cause_quality", 5) {
+        blast.root_cause_depth_score = depth_score;
+        applied = true;
+    }
+
+    if let Some(bandaid_prob) = resp.noul_prob("is_symptom_bandaid") {
+        let clamped = (bandaid_prob as f32).clamp(0.0, 1.0);
+        blast.bandaid_probability = Some(clamped);
+        if bandaid_prob >= BANDAID_WARNING_THRESHOLD && blast.bandaid_debt_warning.is_none() {
+            blast.bandaid_debt_warning = Some(format!(
+                "Calibrated Decisions audit flagged likely symptom-only bandaid ({:.0}% probability).",
+                (bandaid_prob * 100.0).clamp(0.0, 100.0)
+            ));
+        }
+        applied = true;
+    }
+
+    if let Some(reg_prob) = resp.noul_prob("regression_hazard") {
+        applied = true;
+        let severity = if reg_prob >= HIGH_REGRESSION_HAZARD_THRESHOLD {
+            Some(HazardSeverity::High)
+        } else if reg_prob >= MEDIUM_REGRESSION_HAZARD_THRESHOLD {
+            Some(HazardSeverity::Medium)
+        } else {
+            None
+        };
+        if let Some(severity) = severity {
+            let symbol = blast
+                .ring0_mutated
+                .first()
+                .map(|n| n.symbol.clone())
+                .unwrap_or_else(|| "diff".to_string());
+            blast.semantic_hazards.push(SemanticHazard {
+                severity,
+                category: "calibrated_regression_hazard".to_string(),
+                symbol,
+                explanation: format!(
+                    "gemini-decision-1 estimated {:.0}% regression hazard across impacted callers (Ring 1: {}, Ring 2: {}).",
+                    (reg_prob * 100.0).clamp(0.0, 100.0),
+                    blast.ring1_direct_callers.len(),
+                    blast.ring2_transitive_entrypoints.len(),
+                ),
+                mitigation: "Add targeted caller regression tests covering Ring 1/Ring 2 entrypoints and verify contract invariants.".to_string(),
+            });
+        }
+    }
+
+    let confidences: Vec<f64> = ["root_cause_quality", "is_symptom_bandaid", "regression_hazard"]
+        .into_iter()
+        .filter_map(|k| resp.confidence(k))
+        .collect();
+    if !confidences.is_empty() {
+        let mean_conf = confidences.iter().sum::<f64>() / confidences.len() as f64;
+        blast.decision_confidence = Some((mean_conf as f32).clamp(0.0, 1.0));
+        applied = true;
+    }
+
+    if applied {
+        blast.recalculate_composite_risk(base_score);
+    }
+
+    applied
+}
+
+/// Calibrates a structural `BlastRadiusReport` using `gemini-decision-1` (bounded by a 12s timeout).
+///
+/// Graceful no-op returning `false` if `gemini` is `None` or the Decisions API call fails/times out.
+pub async fn calibrate_blast_radius_with_decisions(
+    gemini: Option<&GeminiClient>,
+    problem_statement: &str,
+    candidate_diff: &str,
+    blast: &mut BlastRadiusReport,
+) -> bool {
+    let Some(client) = gemini else {
+        return false;
+    };
+    let req = build_blast_calibration_request(problem_statement, candidate_diff, blast);
+    match tokio::time::timeout(
+        Duration::from_secs(DECISIONS_CALIBRATION_TIMEOUT_SECS),
+        client.evaluate_decisions(&req),
+    )
+    .await
+    {
+        Ok(Ok(resp)) => apply_decision_calibration_to_blast_radius(&resp, blast),
+        Ok(Err(err)) => {
+            warn!(%err, "gemini-decision-1 blast radius calibration failed (graceful no-op)");
+            false
+        }
+        Err(_) => {
+            warn!(
+                timeout_secs = DECISIONS_CALIBRATION_TIMEOUT_SECS,
+                "gemini-decision-1 blast radius calibration timed out (graceful no-op)"
+            );
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use epicenter_common::ImpactRing;
+    use epicenter_gemini::DecisionAnswer;
+
+    fn sample_blast(base_risk: f32) -> BlastRadiusReport {
+        BlastRadiusReport {
+            ring0_mutated: vec![GraphNode {
+                id: "n0".to_string(),
+                symbol: "parse_header".to_string(),
+                file_path: "src/parser.py".to_string(),
+                line: 42,
+                ring: ImpactRing::Ring0,
+                test_coverage_pct: Some(85.0),
+                is_untested_dark_zone: false,
+                radial_x: 0.0,
+                radial_y: 0.0,
+            }],
+            ring1_direct_callers: vec![GraphNode {
+                id: "n1".to_string(),
+                symbol: "handle_request".to_string(),
+                file_path: "src/server.py".to_string(),
+                line: 118,
+                ring: ImpactRing::Ring1,
+                test_coverage_pct: None,
+                is_untested_dark_zone: true,
+                radial_x: 1.0,
+                radial_y: 0.0,
+            }],
+            ring2_transitive_entrypoints: Vec::new(),
+            edges: Vec::new(),
+            semantic_hazards: Vec::new(),
+            composite_risk_score: base_risk,
+            root_cause_depth_score: 50.0,
+            bandaid_debt_warning: None,
+            bandaid_probability: None,
+            decision_confidence: None,
+        }
+    }
+
+    fn decision_resp(
+        root_cause_score: f64,
+        bandaid_prob: f64,
+        regression_prob: f64,
+        confs: (f64, f64, f64),
+    ) -> DecisionResponse {
+        let mut answers = BTreeMap::new();
+        answers.insert(
+            "root_cause_quality".to_string(),
+            DecisionAnswer::Score {
+                score: root_cause_score,
+                legend: BTreeMap::new(),
+                probabilities: BTreeMap::new(),
+                confidence: confs.0,
+            },
+        );
+        answers.insert(
+            "is_symptom_bandaid".to_string(),
+            DecisionAnswer::Noul {
+                noul: bandaid_prob,
+                confidence: confs.1,
+            },
+        );
+        answers.insert(
+            "regression_hazard".to_string(),
+            DecisionAnswer::Noul {
+                noul: regression_prob,
+                confidence: confs.2,
+            },
+        );
+        DecisionResponse {
+            answers,
+            usage: None,
+        }
+    }
+
+    #[test]
+    fn calibrates_high_root_cause_clean_patch_without_regression_hazard() {
+        let mut blast = sample_blast(18.0);
+        let resp = decision_resp(3.6, 0.08, 0.22, (0.90, 0.92, 0.88));
+
+        assert!(apply_decision_calibration_to_blast_radius(&resp, &mut blast));
+        assert!((blast.root_cause_depth_score - 90.0).abs() < 0.01);
+        assert!((blast.bandaid_probability.unwrap() - 0.08).abs() < 0.001);
+        assert!((blast.decision_confidence.unwrap() - 0.90).abs() < 0.001);
+        assert!(blast.bandaid_debt_warning.is_none());
+        assert!(blast.semantic_hazards.is_empty());
+        assert!((blast.composite_risk_score - 18.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calibrates_bandaid_patch_with_high_regression_hazard_and_recalculates_risk() {
+        let mut blast = sample_blast(22.5);
+        let resp = decision_resp(0.8, 0.87, 0.84, (0.85, 0.91, 0.82));
+
+        assert!(apply_decision_calibration_to_blast_radius(&resp, &mut blast));
+        assert!((blast.root_cause_depth_score - 20.0).abs() < 0.01);
+        assert!((blast.bandaid_probability.unwrap() - 0.87).abs() < 0.001);
+        assert!((blast.decision_confidence.unwrap() - 0.86).abs() < 0.001);
+        assert!(blast.bandaid_debt_warning.is_some());
+        assert_eq!(blast.semantic_hazards.len(), 1);
+        assert_eq!(blast.semantic_hazards[0].severity, HazardSeverity::High);
+        assert_eq!(blast.semantic_hazards[0].symbol, "parse_header");
+        // Base 22.5 + High hazard weight (20.0) = 42.5
+        assert!((blast.composite_risk_score - 42.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn calibrates_medium_regression_hazard_threshold_accurately() {
+        let mut blast = sample_blast(15.0);
+        let resp = decision_resp(2.0, 0.45, 0.65, (0.75, 0.80, 0.70));
+
+        assert!(apply_decision_calibration_to_blast_radius(&resp, &mut blast));
+        assert!((blast.root_cause_depth_score - 50.0).abs() < 0.01);
+        assert_eq!(blast.semantic_hazards.len(), 1);
+        assert_eq!(blast.semantic_hazards[0].severity, HazardSeverity::Medium);
+        // Base 15.0 + Medium hazard weight (10.0) = 25.0
+        assert!((blast.composite_risk_score - 25.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn noop_calibration_when_decision_response_is_empty() {
+        let mut blast = sample_blast(14.0);
+        let empty = DecisionResponse::default();
+        assert!(!apply_decision_calibration_to_blast_radius(&empty, &mut blast));
+        assert!((blast.root_cause_depth_score - 50.0).abs() < 0.01);
+        assert!(blast.bandaid_probability.is_none());
+        assert!(blast.decision_confidence.is_none());
+        assert!(blast.semantic_hazards.is_empty());
+        assert!((blast.composite_risk_score - 14.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn preflight_spec_clarity_appends_note_only_to_failed_arms_when_below_threshold() {
+        let req = build_pr_spec_clarity_request(
+            "Fix bug",
+            "",
+            &["src/parser.py".to_string()],
+        );
+        assert_eq!(req.model, epicenter_common::GEMINI_DECISION_MODEL);
+        assert!(req.questions.contains_key("has_actionable_spec"));
+        assert!(req.questions.contains_key("is_self_contained"));
+
+        let mut answers = BTreeMap::new();
+        answers.insert(
+            "has_actionable_spec".to_string(),
+            DecisionAnswer::Noul {
+                noul: 0.18,
+                confidence: 0.88,
+            },
+        );
+        answers.insert(
+            "is_self_contained".to_string(),
+            DecisionAnswer::Noul {
+                noul: 0.82,
+                confidence: 0.80,
+            },
+        );
+        let clarity = parse_pr_spec_clarity_response(&DecisionResponse {
+            answers,
+            usage: None,
+        })
+        .expect("should parse spec clarity signal");
+        assert!((clarity.has_actionable_spec - 0.18).abs() < 0.001);
+        assert!((clarity.is_self_contained - 0.82).abs() < 0.001);
+
+        let mut outcomes = vec![
+            ArmOutcome {
+                case_id: "c1".to_string(),
+                arm: EvalArm::SingleModelCall,
+                resolved_ground_truth: false,
+                regression_free: true,
+                speedup_pct: None,
+                blast_risk_score: None,
+                root_cause_depth_score: None,
+                dark_zone_touches: None,
+                duration_ms: 100,
+                notes: Some("FAILED host ground-truth tests".to_string()),
+                failure_category: Some("ground_truth_tests_failed".to_string()),
+            },
+            ArmOutcome {
+                case_id: "c1".to_string(),
+                arm: EvalArm::SingleManagedAgent,
+                resolved_ground_truth: false,
+                regression_free: false,
+                speedup_pct: None,
+                blast_risk_score: None,
+                root_cause_depth_score: None,
+                dark_zone_touches: None,
+                duration_ms: 200,
+                notes: None,
+                failure_category: Some("patch_apply_conflict".to_string()),
+            },
+            ArmOutcome {
+                case_id: "c1".to_string(),
+                arm: EvalArm::EpicenterTournament,
+                resolved_ground_truth: true,
+                regression_free: true,
+                speedup_pct: None,
+                blast_risk_score: Some(12.0),
+                root_cause_depth_score: Some(88.0),
+                dark_zone_touches: Some(0),
+                duration_ms: 300,
+                notes: Some("Winner 's1'".to_string()),
+                failure_category: None,
+            },
+        ];
+
+        apply_spec_clarity_note_to_failed_arms(&mut outcomes, &clarity);
+        assert_eq!(
+            outcomes[0].notes.as_deref(),
+            Some("FAILED host ground-truth tests | Low PR spec clarity (18%)")
+        );
+        assert_eq!(
+            outcomes[1].notes.as_deref(),
+            Some("Low PR spec clarity (18%)")
+        );
+        assert_eq!(outcomes[2].notes.as_deref(), Some("Winner 's1'"));
+
+        // High clarity (>= 0.30) must not modify failed arms.
+        let high_clarity = PrSpecClaritySignal {
+            has_actionable_spec: 0.75,
+            is_self_contained: 0.90,
+            confidence: Some(0.91),
+        };
+        let mut failed_only = vec![ArmOutcome {
+            case_id: "c2".to_string(),
+            arm: EvalArm::SingleModelCall,
+            resolved_ground_truth: false,
+            regression_free: true,
+            speedup_pct: None,
+            blast_risk_score: None,
+            root_cause_depth_score: None,
+            dark_zone_touches: None,
+            duration_ms: 100,
+            notes: Some("original".to_string()),
+            failure_category: Some("ground_truth_tests_failed".to_string()),
+        }];
+        apply_spec_clarity_note_to_failed_arms(&mut failed_only, &high_clarity);
+        assert_eq!(failed_only[0].notes.as_deref(), Some("original"));
+    }
+
+    #[tokio::test]
+    async fn calibrate_blast_radius_with_decisions_is_noop_when_gemini_is_none() {
+        let mut blast = sample_blast(19.5);
+        let calibrated = calibrate_blast_radius_with_decisions(
+            None,
+            "Fix empty header crash",
+            "diff --git a/src/parser.py b/src/parser.py",
+            &mut blast,
+        )
+        .await;
+        assert!(!calibrated);
+        assert!((blast.root_cause_depth_score - 50.0).abs() < 0.01);
+        assert!((blast.composite_risk_score - 19.5).abs() < 0.01);
+    }
 }

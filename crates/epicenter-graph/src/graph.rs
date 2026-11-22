@@ -385,6 +385,8 @@ impl RepoCallGraph {
             composite_risk_score,
             root_cause_depth_score: 50.0,
             bandaid_debt_warning: None,
+            bandaid_probability: None,
+            decision_confidence: None,
         }
     }
 

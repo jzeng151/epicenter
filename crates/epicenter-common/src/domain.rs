@@ -135,7 +135,7 @@ pub struct MultimodalFinding {
 }
 
 /// Structured intake brief synthesized from user prompt + multimodal evidence + target repository.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IntakeBrief {
     pub id: Uuid,
     pub task_kind: TaskKind,
@@ -149,6 +149,13 @@ pub struct IntakeBrief {
     pub attachments: Vec<AttachmentMeta>,
     #[serde(default)]
     pub suspect_files: Vec<String>,
+    /// Calibrated probability (`0.0..=1.0`) from `gemini-decision-1` that this issue can be
+    /// reproduced via headless CLI unit tests without external browsers/databases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_testable_probability: Option<f32>,
+    /// Calibrated dynamic strategy count (`1..=5`) suggested by `gemini-decision-1` rubric triage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_k: Option<u8>,
     pub created_at: DateTime<Utc>,
 }
 

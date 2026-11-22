@@ -48,49 +48,12 @@ pub async fn run_planner_stage(
     let focused_sources =
         repo.prompt_focused_source_context(&session.intake.suspect_files, &focus_text, 10_000);
 
-    let prompt = format!(
-        "You are Stage 3 (Dynamic-K Orthogonal Strategy Architect) of the Epicenter tournament.\n\
-         Default to K=3 crisp, genuinely orthogonal engineering strategies (range 1..=5 only if\n\
-         the problem clearly demands fewer or more degrees of freedom).\n\n\
-         MANDATORY SPECTRUM RULES:\n\
-         - Strategy 1 (`surgical_hotfix`): minimal footprint, narrowest diff, lowest immediate collateral risk.\n\
-         - Strategy 2 (`algorithmic_optimization` or `targeted_refactor`): optimizes hot-path throughput/memory\n\
-           or refactors the local subsystem cleanly.\n\
-         - Strategy 3 (`architectural_root_cause`): cures the underlying upstream invariant cleanly.\n\
-         - Set `allow_caller_tests: true` on `architectural_root_cause` strategies so workers can add\n\
-           regression tests for untested callers and shrink dark-zone blast-radius risk.\n\
-         - Give every strategy explicit `anti_overlap_rules` forbidding it from copying sibling approaches.\n\
-         - Strategy IDs must be short lowercase slugs (e.g. \"s1-hotfix\", \"s2-algorithmic\", \"s3-root-cause\").\n\
-         - Keep each strategy's thesis, tradeoff_axis, and risk_hypothesis crisp (1-2 concise sentences).\n\n\
-         FAST ARENA MICRO-BENCHMARK SPEC:\n\
-         - Design `shared_benchmark_spec` with `trials: 3`, `warmup_trials: 1`, `metric_unit: \"ms\"`.\n\
-         - Provide a fast, self-contained `script_content` in {} that exercises the affected code path\n\
-           in ~15–30ms per run (loops over the hot function/API directly, exits 0 on BOTH unmodified\n\
-           baseline and patched code so wall-clock timings are cleanly comparable!).\n\
-         - STRICT RUNTIME BUDGET: NEVER write heavy 500–1000ms loops (those burn ~15s across warmup+trials!).\n\
-           Choose a modest iteration count targeting ~15–30ms per invocation so total Stage 5 benchmark\n\
-           runtime stays under ~3 seconds across all candidates.\n\n\
-         Repository Runtime: {}\n\
-         Issue Title: {}\n\
-         Task Kind: {:?}\n\
-         Problem Statement:\n{}\n\
-         Repro Steps: {:?}\n\
-         Suspect Files: {:?}\n\
-         Red-Gate Test Command: {}\n\
-         Red-Gate Locked Path: {:?}\n\n\
-         MULTIMODAL FINDINGS (screenshots / recordings / audio / logs):\n{multimodal_block}\n\n\
-         Repository Sources:\n{}\n\n\
-         Return STRICT JSON matching the schema.",
+    let prompt = build_planner_prompt(
         prepared.runtime.label(),
-        prepared.runtime.label(),
-        session.intake.title,
-        session.intake.task_kind,
-        session.intake.problem_statement,
-        session.intake.repro_steps,
-        session.intake.suspect_files,
-        red_gate.test_command(),
-        red_gate.locked_test_path(),
-        focused_sources,
+        session,
+        red_gate,
+        &multimodal_block,
+        &focused_sources,
     );
 
     let mut req = CreateInteractionRequest::for_model(Gemini4Model::Carbon, prompt);
@@ -166,6 +129,81 @@ pub(crate) fn planner_generation_config() -> GenerationConfig {
         thinking_level: Some("low".to_string()),
         ..Default::default()
     }
+}
+
+/// Formats the calibrated target strategy count directive (`1..=5`) for Stage 3 Carbon.
+pub(crate) fn format_calibrated_k_directive(suggested_k: Option<u8>) -> String {
+    match suggested_k.map(|k| k.clamp(1, 5)) {
+        Some(k) => format!(
+            "Calibrated Stage 1 triage (`gemini-decision-1`) recommends target strategy count K={k} (valid range 1..=5).\n\
+             Design K={k} crisp, genuinely orthogonal engineering strategies (stay within 1..=5 and only\n\
+             deviate from K={k} if the concrete source code clearly demands fewer or more degrees of freedom)."
+        ),
+        None => "Default to K=3 crisp, genuinely orthogonal engineering strategies (range 1..=5 only if\n\
+             the problem clearly demands fewer or more degrees of freedom)."
+            .to_string(),
+    }
+}
+
+/// Builds the Stage 3 Carbon strategy planning prompt, incorporating Stage 1's calibrated `suggested_k`
+/// when available while preserving `1..=5` tournament invariants.
+pub(crate) fn build_planner_prompt(
+    runtime_label: &str,
+    session: &TournamentSession,
+    red_gate: &RedGateSpec,
+    multimodal_block: &str,
+    focused_sources: &str,
+) -> String {
+    let k_directive = format_calibrated_k_directive(session.intake.suggested_k);
+    let calibrated_k_label = session
+        .intake
+        .suggested_k
+        .map(|k| format!("{} (calibrated by gemini-decision-1)", k.clamp(1, 5)))
+        .unwrap_or_else(|| "3 (default)".to_string());
+
+    format!(
+        "You are Stage 3 (Dynamic-K Orthogonal Strategy Architect) of the Epicenter tournament.\n\
+         {k_directive}\n\n\
+         MANDATORY SPECTRUM RULES:\n\
+         - Strategy 1 (`surgical_hotfix`): minimal footprint, narrowest diff, lowest immediate collateral risk.\n\
+         - Strategy 2 (`algorithmic_optimization` or `targeted_refactor`): optimizes hot-path throughput/memory\n\
+           or refactors the local subsystem cleanly.\n\
+         - Strategy 3 (`architectural_root_cause`): cures the underlying upstream invariant cleanly.\n\
+         - For K < 3, prioritize the highest-signal depth tiers without redundancy; for K > 3 (up to 5),\n\
+           add genuinely distinct algorithmic or architectural designs with zero overlap.\n\
+         - Set `allow_caller_tests: true` on `architectural_root_cause` strategies so workers can add\n\
+           regression tests for untested callers and shrink dark-zone blast-radius risk.\n\
+         - Give every strategy explicit `anti_overlap_rules` forbidding it from copying sibling approaches.\n\
+         - Strategy IDs must be short lowercase slugs (e.g. \"s1-hotfix\", \"s2-algorithmic\", \"s3-root-cause\").\n\
+         - Keep each strategy's thesis, tradeoff_axis, and risk_hypothesis crisp (1-2 concise sentences).\n\n\
+         FAST ARENA MICRO-BENCHMARK SPEC:\n\
+         - Design `shared_benchmark_spec` with `trials: 3`, `warmup_trials: 1`, `metric_unit: \"ms\"`.\n\
+         - Provide a fast, self-contained `script_content` in {runtime_label} that exercises the affected code path\n\
+           in ~15–30ms per run (loops over the hot function/API directly, exits 0 on BOTH unmodified\n\
+           baseline and patched code so wall-clock timings are cleanly comparable!).\n\
+         - STRICT RUNTIME BUDGET: NEVER write heavy 500–1000ms loops (those burn ~15s across warmup+trials!).\n\
+           Choose a modest iteration count targeting ~15–30ms per invocation so total Stage 5 benchmark\n\
+           runtime stays under ~3 seconds across all candidates.\n\n\
+         Repository Runtime: {runtime_label}\n\
+         Calibrated Target K: {calibrated_k_label}\n\
+         Issue Title: {}\n\
+         Task Kind: {:?}\n\
+         Problem Statement:\n{}\n\
+         Repro Steps: {:?}\n\
+         Suspect Files: {:?}\n\
+         Red-Gate Test Command: {}\n\
+         Red-Gate Locked Path: {:?}\n\n\
+         MULTIMODAL FINDINGS (screenshots / recordings / audio / logs):\n{multimodal_block}\n\n\
+         Repository Sources:\n{focused_sources}\n\n\
+         Return STRICT JSON matching the schema.",
+        session.intake.title,
+        session.intake.task_kind,
+        session.intake.problem_statement,
+        session.intake.repro_steps,
+        session.intake.suspect_files,
+        red_gate.test_command(),
+        red_gate.locked_test_path(),
+    )
 }
 
 /// Normalizes strategy IDs, enforces `1..=5` clamping and uniqueness, ensures `allow_caller_tests`
@@ -388,4 +426,70 @@ fn strategy_plan_schema() -> serde_json::Value {
         },
         "required": ["degree_of_freedom_rationale", "strategies", "shared_benchmark_spec"]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TournamentEngine;
+    use epicenter_common::{BugRedGate, CreateSessionRequest, RedGateResolution, TaskKind};
+
+    fn sample_session_and_gate(suggested_k: Option<u8>) -> (TournamentSession, RedGateSpec) {
+        let mut session = TournamentEngine::initialize_session(&CreateSessionRequest {
+            repo_url: "https://github.com/acme/pricing".to_string(),
+            commit_sha: Some("deadbeef".to_string()),
+            git_ref: Some("main".to_string()),
+            task_kind: Some(TaskKind::Bug),
+            title: Some("Cache collision across tenants".to_string()),
+            problem_statement: "Shared pricing cache collides when tax rates differ.".to_string(),
+            attachment_ids: Vec::new(),
+            attachments: Vec::new(),
+        });
+        session.intake.suggested_k = suggested_k;
+        session.intake.suspect_files = vec!["app/pricing.py".to_string()];
+
+        let gate = RedGateSpec::Bug(BugRedGate {
+            repro_test_path: "tests/test_epicenter_repro.py".to_string(),
+            repro_test_patch: String::new(),
+            test_command: "pytest -q tests/test_epicenter_repro.py".to_string(),
+            verified_fails_on_head: true,
+            failure_excerpt: "AssertionError".to_string(),
+            base_environment_id: None,
+            resolution: RedGateResolution::VerifiedNeon,
+        });
+        (session, gate)
+    }
+
+    #[test]
+    fn calibrated_k_directive_handles_none_valid_and_out_of_range_values() {
+        let default_dir = format_calibrated_k_directive(None);
+        assert!(default_dir.contains("Default to K=3"));
+        assert!(default_dir.contains("1..=5"));
+
+        let k2 = format_calibrated_k_directive(Some(2));
+        assert!(k2.contains("K=2"));
+        assert!(k2.contains("gemini-decision-1"));
+
+        let k0_clamped = format_calibrated_k_directive(Some(0));
+        assert!(k0_clamped.contains("K=1"));
+
+        let k9_clamped = format_calibrated_k_directive(Some(9));
+        assert!(k9_clamped.contains("K=5"));
+    }
+
+    #[test]
+    fn build_planner_prompt_incorporates_suggested_k_and_preserves_bounds() {
+        let (session_cal, gate) = sample_session_and_gate(Some(4));
+        let prompt_cal =
+            build_planner_prompt("Python", &session_cal, &gate, "None", "def compute_total(): pass");
+        assert!(prompt_cal.contains("target strategy count K=4"));
+        assert!(prompt_cal.contains("Calibrated Target K: 4 (calibrated by gemini-decision-1)"));
+        assert!(prompt_cal.contains("1..=5"));
+
+        let (session_def, _) = sample_session_and_gate(None);
+        let prompt_def =
+            build_planner_prompt("Python", &session_def, &gate, "None", "def compute_total(): pass");
+        assert!(prompt_def.contains("Default to K=3"));
+        assert!(prompt_def.contains("Calibrated Target K: 3 (default)"));
+    }
 }

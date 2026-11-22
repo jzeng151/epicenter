@@ -6,6 +6,9 @@ use thiserror::Error;
 /// Gemini 3.8 Flash TTS model used for executive audio briefings.
 pub const GEMINI_TTS_MODEL: &str = "gemini-3.8-flash-tts";
 
+/// Gemini Decision 1 model powering the zero-output-token `/v1beta/decisions` endpoint.
+pub const GEMINI_DECISION_MODEL: &str = "gemini-decision-1";
+
 /// Base Managed Agent identifier on Gemini Interactions API.
 pub const MANAGED_AGENT_BASE: &str = "antigravity-preview-09-2026";
 

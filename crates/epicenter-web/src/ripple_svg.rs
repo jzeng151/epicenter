@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use epicenter_common::{
     BlastRadiusReport, CandidateResult, EdgeRelation, GraphEdge, GraphNode, HazardSeverity,
-    ImpactRing, SemanticHazard, StrategyDepthTier, TournamentSession,
+    ImpactRing, SemanticHazard, StrategyDepthTier, TournamentSession, GEMINI_DECISION_MODEL,
 };
 use leptos::prelude::*;
 
@@ -68,6 +68,59 @@ fn severity_pill_class(sev: HazardSeverity) -> &'static str {
         HazardSeverity::Medium => "epi-pill epi-pill-amber",
         HazardSeverity::Low => "epi-pill epi-pill-cyan",
     }
+}
+
+/// Formats `bandaid_probability` (`0.0..=1.0`) as `("Workaround Risk: X%", pill_class)`.
+/// Green when `<= 25%`, amber when `26%..=60%`, red when `> 60%`.
+pub(crate) fn workaround_risk_pill(prob: f32) -> (String, &'static str) {
+    let pct = crate::probability_percent(prob);
+    let cls = if pct <= 25.0 {
+        "epi-pill epi-pill-emerald"
+    } else if pct <= 60.0 {
+        "epi-pill epi-pill-amber"
+    } else {
+        "epi-pill epi-pill-red"
+    };
+    (format!("Workaround Risk: {pct:.0}%"), cls)
+}
+
+/// Compact candidate-card tag variant of [`workaround_risk_pill`].
+pub(crate) fn workaround_risk_tag(prob: f32) -> (String, &'static str) {
+    let pct = crate::probability_percent(prob);
+    let cls = if pct <= 25.0 {
+        "epi-tag epi-tag-emerald"
+    } else if pct <= 60.0 {
+        "epi-tag epi-tag-amber"
+    } else {
+        "epi-tag epi-tag-red"
+    };
+    (format!("Workaround Risk: {pct:.0}%"), cls)
+}
+
+/// Formats `decision_confidence` (`0.0..=1.0`) as `("Audit Confidence: X%", pill_class)`.
+pub(crate) fn audit_confidence_pill(conf: f32) -> (String, &'static str) {
+    let pct = crate::probability_percent(conf);
+    let cls = if pct >= 75.0 {
+        "epi-pill epi-pill-cyan"
+    } else if pct >= 50.0 {
+        "epi-pill"
+    } else {
+        "epi-pill epi-pill-amber"
+    };
+    (format!("Audit Confidence: {pct:.0}%"), cls)
+}
+
+/// Compact candidate-card tag variant of [`audit_confidence_pill`].
+pub(crate) fn audit_confidence_tag(conf: f32) -> (String, &'static str) {
+    let pct = crate::probability_percent(conf);
+    let cls = if pct >= 75.0 {
+        "epi-tag epi-tag-cyan"
+    } else if pct >= 50.0 {
+        "epi-tag"
+    } else {
+        "epi-tag epi-tag-amber"
+    };
+    (format!("Audit Confidence: {pct:.0}%"), cls)
 }
 
 fn edge_relation_label(rel: EdgeRelation) -> &'static str {
@@ -427,6 +480,8 @@ fn render_blast_report_view(
     } else {
         "epi-pill epi-pill-emerald"
     };
+    let workaround_pill = report.bandaid_probability.map(workaround_risk_pill);
+    let confidence_pill = report.decision_confidence.map(audit_confidence_pill);
 
     let node_positions: HashMap<String, (f32, f32, f32)> = all_nodes
         .iter()
@@ -497,6 +552,22 @@ fn render_blast_report_view(
         <div class="epi-ripple-metrics-strip">
             <span class=risk_pill_class>{format!("Impact Risk: {:.0}/100", composite_risk)}</span>
             <span class=depth_pill_class>{format!("Root-Cause Depth: {:.0}/100", root_cause_depth)}</span>
+            {workaround_pill.map(|(label, cls)| view! {
+                <span
+                    class=cls
+                    title=format!("Calibrated symptom-workaround probability via {GEMINI_DECISION_MODEL}")
+                >
+                    {label}
+                </span>
+            })}
+            {confidence_pill.map(|(label, cls)| view! {
+                <span
+                    class=cls
+                    title=format!("Mean calibrated audit confidence via {GEMINI_DECISION_MODEL}")
+                >
+                    {label}
+                </span>
+            })}
             <span class="epi-pill">{format!("Symbols: {total_nodes} (Modified: {} · Direct: {} · Indirect: {})", report.ring0_mutated.len(), report.ring1_direct_callers.len(), report.ring2_transitive_entrypoints.len())}</span>
             <span class=dark_zone_pill_class>
                 {format!("Untested Callers: {dark_zones}")}
@@ -1097,5 +1168,86 @@ fn render_hazard_item(hazard: SemanticHazard) -> impl IntoView {
                 {hazard.mitigation}
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        audit_confidence_pill, audit_confidence_tag, workaround_risk_pill, workaround_risk_tag,
+    };
+
+    #[test]
+    fn workaround_risk_thresholds_match_spec() {
+        assert_eq!(
+            workaround_risk_pill(0.0),
+            ("Workaround Risk: 0%".to_string(), "epi-pill epi-pill-emerald")
+        );
+        assert_eq!(
+            workaround_risk_pill(0.25),
+            ("Workaround Risk: 25%".to_string(), "epi-pill epi-pill-emerald")
+        );
+        assert_eq!(
+            workaround_risk_pill(0.26),
+            ("Workaround Risk: 26%".to_string(), "epi-pill epi-pill-amber")
+        );
+        assert_eq!(
+            workaround_risk_pill(0.60),
+            ("Workaround Risk: 60%".to_string(), "epi-pill epi-pill-amber")
+        );
+        assert_eq!(
+            workaround_risk_pill(0.61),
+            ("Workaround Risk: 61%".to_string(), "epi-pill epi-pill-red")
+        );
+        assert_eq!(
+            workaround_risk_pill(1.0),
+            ("Workaround Risk: 100%".to_string(), "epi-pill epi-pill-red")
+        );
+
+        assert_eq!(
+            workaround_risk_tag(0.18),
+            ("Workaround Risk: 18%".to_string(), "epi-tag epi-tag-emerald")
+        );
+        assert_eq!(
+            workaround_risk_tag(0.45),
+            ("Workaround Risk: 45%".to_string(), "epi-tag epi-tag-amber")
+        );
+        assert_eq!(
+            workaround_risk_tag(0.82),
+            ("Workaround Risk: 82%".to_string(), "epi-tag epi-tag-red")
+        );
+    }
+
+    #[test]
+    fn audit_confidence_formats_and_tiers_cleanly() {
+        assert_eq!(
+            audit_confidence_pill(0.91),
+            ("Audit Confidence: 91%".to_string(), "epi-pill epi-pill-cyan")
+        );
+        assert_eq!(
+            audit_confidence_pill(0.75),
+            ("Audit Confidence: 75%".to_string(), "epi-pill epi-pill-cyan")
+        );
+        assert_eq!(
+            audit_confidence_pill(0.62),
+            ("Audit Confidence: 62%".to_string(), "epi-pill")
+        );
+        assert_eq!(
+            audit_confidence_pill(0.42),
+            ("Audit Confidence: 42%".to_string(), "epi-pill epi-pill-amber")
+        );
+
+        assert_eq!(
+            audit_confidence_tag(0.88),
+            ("Audit Confidence: 88%".to_string(), "epi-tag epi-tag-cyan")
+        );
+        assert_eq!(
+            audit_confidence_tag(0.55),
+            ("Audit Confidence: 55%".to_string(), "epi-tag")
+        );
+        assert_eq!(
+            audit_confidence_tag(0.30),
+            ("Audit Confidence: 30%".to_string(), "epi-tag epi-tag-amber")
+        );
     }
 }

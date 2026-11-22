@@ -584,7 +584,7 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                                         "Live Host-Verified Run"
                                     </span>
                                     <span style="font-size:12px;color:var(--text-muted);">
-                                        "Scored by running withheld PR tests against the repository's pre-fix commit."
+                                        "Scored by running withheld PR tests against the pre-fix commit, with calibrated root-cause rubric scoring across all 3 approaches."
                                     </span>
                                 </div>
                             }.into_any()
@@ -809,6 +809,8 @@ fn render_speedup_card(scorecard: &EvalScorecard) -> impl IntoView {
     }
 }
 
+const ROOT_CAUSE_QUALITY_HINT: &str = "Higher is deeper (0–100 calibrated rubric)";
+
 fn render_metric_cards(scorecard: &EvalScorecard) -> impl IntoView {
     view! {
         <div class="epi-metric-grid">
@@ -836,7 +838,7 @@ fn render_metric_cards(scorecard: &EvalScorecard) -> impl IntoView {
             {render_bar_metric_card(
                 scorecard,
                 "Root-Cause Quality",
-                "Higher is deeper (0–100 scale)",
+                ROOT_CAUSE_QUALITY_HINT,
                 |m| m.mean_root_cause_depth.map(|v| (v as f64, format!("{v:.0} / 100"))),
                 false,
             )}
@@ -1122,7 +1124,18 @@ fn render_case_cards(cases: &[EvalIssueCase], outcomes: &[ArmOutcome]) -> impl I
 
 #[cfg(test)]
 mod tests {
-    use super::{humanize_failure_category, humanize_failure_summary_line, is_simulated_label};
+    use super::{
+        humanize_failure_category, humanize_failure_summary_line, is_simulated_label,
+        ROOT_CAUSE_QUALITY_HINT,
+    };
+
+    #[test]
+    fn root_cause_metric_hint_reflects_calibrated_rubric() {
+        assert_eq!(
+            ROOT_CAUSE_QUALITY_HINT,
+            "Higher is deeper (0–100 calibrated rubric)"
+        );
+    }
 
     #[test]
     fn detects_simulated_labels_case_insensitively() {
