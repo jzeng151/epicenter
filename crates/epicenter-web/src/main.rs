@@ -15,7 +15,7 @@ use crate::pareto_svg::{CandidateApproachesStrip, ParetoAndArenaPanel};
 use crate::ripple_svg::BlastRadiusRippleMap;
 use epicenter_common::{
     LiveEvent, LogLevel, ServerStatusResponse, SessionListItem, TaskKind, TournamentSession,
-    TournamentStage,
+    TournamentStage, GEMINI_DECISION_MODEL,
 };
 use leptos::prelude::*;
 use uuid::Uuid;
@@ -79,6 +79,36 @@ fn log_level_text(level: LogLevel) -> &'static str {
         LogLevel::Error => "ERR",
         LogLevel::Debug => "DBG",
     }
+}
+
+pub(crate) const LOW_UNIT_TEST_CONFIDENCE_HINT: &str =
+    "Low unit-test confidence — visual or external-service issues work better in Feature mode.";
+
+/// Clamps a calibrated `0.0..=1.0` probability and rounds it to an integer percentage (`0..=100`).
+pub(crate) fn probability_percent(prob: f32) -> f32 {
+    if !prob.is_finite() {
+        return 0.0;
+    }
+    (prob.clamp(0.0, 1.0) * 100.0).round()
+}
+
+/// Formats Stage 1 `unit_testable_probability` as `(label, badge_class, optional_hint)`.
+/// Emerald at `>= 65%`, amber at `35%..65%`, red with plain-English hint at `< 35%`.
+pub(crate) fn unit_testable_badge_info(prob: f32) -> (String, &'static str, Option<&'static str>) {
+    let pct = probability_percent(prob);
+    let label = format!("Unit-Testable: {pct:.0}%");
+    if pct >= 65.0 {
+        (label, "badge badge-emerald", None)
+    } else if pct >= 35.0 {
+        (label, "badge badge-amber", None)
+    } else {
+        (label, "badge badge-red", Some(LOW_UNIT_TEST_CONFIDENCE_HINT))
+    }
+}
+
+/// Formats Stage 1 calibrated `suggested_k` into a subtle badge label.
+pub(crate) fn suggested_approaches_label(k: u8) -> String {
+    format!("Suggested Approaches: {k}")
 }
 
 fn main() {
@@ -332,6 +362,37 @@ pub fn App() -> impl IntoView {
                         </div>
                     </div>
 
+                    <div class="model-strip" aria-label="Active Gemini models">
+                        <span class="model-pill" title="Multimodal intake via gemini-4-hydrogen">
+                            <span class="model-dot dot-cyan" aria-hidden="true"></span>
+                            <strong>"Hydrogen"</strong>
+                            "· Intake"
+                        </span>
+                        <span
+                            class="model-pill model-pill-decision"
+                            title=format!("Calibrated triage and rubric scoring via {GEMINI_DECISION_MODEL}")
+                        >
+                            <span class="model-dot dot-violet" aria-hidden="true"></span>
+                            <strong>"Decision 1"</strong>
+                            "· Triage & Rubric"
+                        </span>
+                        <span class="model-pill" title="Isolated candidate workers via gemini-4-neon">
+                            <span class="model-dot dot-emerald" aria-hidden="true"></span>
+                            <strong>"Neon"</strong>
+                            "· Workers"
+                        </span>
+                        <span class="model-pill" title="Strategy planning and risk audit via gemini-4-carbon">
+                            <span class="model-dot dot-amber" aria-hidden="true"></span>
+                            <strong>"Carbon"</strong>
+                            "· Audit"
+                        </span>
+                        <span class="model-pill" title="2-speaker audio walkthrough via gemini-3.8-flash-tts">
+                            <span class="model-dot dot-cyan" aria-hidden="true"></span>
+                            <strong>"TTS"</strong>
+                            "· Briefing"
+                        </span>
+                    </div>
+
                     <div class="header-right">
                         <div class="status-pills" role="status" aria-live="polite" aria-label="Server status">
                             {move || match server_status.get() {
@@ -482,6 +543,17 @@ pub fn App() -> impl IntoView {
                                 } else {
                                     format!("{cand_count} candidates")
                                 };
+                                let unit_testable_meta = sess
+                                    .intake
+                                    .unit_testable_probability
+                                    .map(unit_testable_badge_info);
+                                let low_unit_test_hint = unit_testable_meta
+                                    .as_ref()
+                                    .and_then(|(_, _, hint)| *hint);
+                                let suggested_k_label = sess
+                                    .intake
+                                    .suggested_k
+                                    .map(suggested_approaches_label);
 
                                 view! {
                                     <section class="panel" aria-label="Active comparison progress">
@@ -494,6 +566,22 @@ pub fn App() -> impl IntoView {
                                                         {repo_display}
                                                     </span>
                                                     <span class="badge">{cand_label}</span>
+                                                    {unit_testable_meta.map(|(label, cls, _)| view! {
+                                                        <span
+                                                            class=cls
+                                                            title=format!("Calibrated headless unit-testability via {GEMINI_DECISION_MODEL}")
+                                                        >
+                                                            {label}
+                                                        </span>
+                                                    })}
+                                                    {suggested_k_label.map(|label| view! {
+                                                        <span
+                                                            class="badge"
+                                                            title=format!("Calibrated approach count via {GEMINI_DECISION_MODEL}")
+                                                        >
+                                                            {label}
+                                                        </span>
+                                                    })}
                                                 </div>
 
                                                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -533,6 +621,12 @@ pub fn App() -> impl IntoView {
                                                     </button>
                                                 </div>
                                             </div>
+
+                                            {low_unit_test_hint.map(|hint| view! {
+                                                <div class="intake-triage-hint" role="note">
+                                                    {hint}
+                                                </div>
+                                            })}
 
                                             <ol class="seismograph-stages" aria-label="Comparison stages">
                                                 {PIPELINE_STAGES.into_iter().enumerate().map(|(idx, (_st, label))| {
@@ -661,5 +755,63 @@ pub fn App() -> impl IntoView {
                 }}
             </main>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        probability_percent, suggested_approaches_label, unit_testable_badge_info,
+        LOW_UNIT_TEST_CONFIDENCE_HINT,
+    };
+
+    #[test]
+    fn probability_percent_clamps_and_handles_non_finite() {
+        assert_eq!(probability_percent(0.0), 0.0);
+        assert_eq!(probability_percent(0.944), 94.0);
+        assert_eq!(probability_percent(1.25), 100.0);
+        assert_eq!(probability_percent(-0.2), 0.0);
+        assert_eq!(probability_percent(f32::NAN), 0.0);
+        assert_eq!(probability_percent(f32::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn unit_testable_badge_classifies_all_three_thresholds() {
+        let (lbl_hi, cls_hi, hint_hi) = unit_testable_badge_info(0.65);
+        assert_eq!(lbl_hi, "Unit-Testable: 65%");
+        assert_eq!(cls_hi, "badge badge-emerald");
+        assert_eq!(hint_hi, None);
+
+        let (lbl_top, cls_top, hint_top) = unit_testable_badge_info(0.94);
+        assert_eq!(lbl_top, "Unit-Testable: 94%");
+        assert_eq!(cls_top, "badge badge-emerald");
+        assert_eq!(hint_top, None);
+
+        let (lbl_mid_hi, cls_mid_hi, hint_mid_hi) = unit_testable_badge_info(0.64);
+        assert_eq!(lbl_mid_hi, "Unit-Testable: 64%");
+        assert_eq!(cls_mid_hi, "badge badge-amber");
+        assert_eq!(hint_mid_hi, None);
+
+        let (lbl_mid_lo, cls_mid_lo, hint_mid_lo) = unit_testable_badge_info(0.35);
+        assert_eq!(lbl_mid_lo, "Unit-Testable: 35%");
+        assert_eq!(cls_mid_lo, "badge badge-amber");
+        assert_eq!(hint_mid_lo, None);
+
+        let (lbl_lo, cls_lo, hint_lo) = unit_testable_badge_info(0.34);
+        assert_eq!(lbl_lo, "Unit-Testable: 34%");
+        assert_eq!(cls_lo, "badge badge-red");
+        assert_eq!(hint_lo, Some(LOW_UNIT_TEST_CONFIDENCE_HINT));
+
+        let (lbl_zero, cls_zero, hint_zero) = unit_testable_badge_info(0.0);
+        assert_eq!(lbl_zero, "Unit-Testable: 0%");
+        assert_eq!(cls_zero, "badge badge-red");
+        assert_eq!(hint_zero, Some(LOW_UNIT_TEST_CONFIDENCE_HINT));
+    }
+
+    #[test]
+    fn suggested_approaches_formats_cleanly() {
+        assert_eq!(suggested_approaches_label(1), "Suggested Approaches: 1");
+        assert_eq!(suggested_approaches_label(3), "Suggested Approaches: 3");
+        assert_eq!(suggested_approaches_label(5), "Suggested Approaches: 5");
     }
 }

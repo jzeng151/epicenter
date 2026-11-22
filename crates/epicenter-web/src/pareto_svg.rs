@@ -1,7 +1,8 @@
 // Owned by `neon-web-viz`: `<svg>` Speedup-vs-Risk Pareto scatter chart + Arena p50/p95 bars + 3 Crowned Badges.
+use crate::ripple_svg::{audit_confidence_tag, workaround_risk_tag};
 use epicenter_common::{
     percentile_ms, CandidateBadge, CandidateResult, CandidateStatus, StrategyDepthTier,
-    StrategySpec, TournamentSession,
+    StrategySpec, TournamentSession, GEMINI_DECISION_MODEL,
 };
 use leptos::prelude::*;
 
@@ -155,6 +156,18 @@ pub fn CandidateApproachesStrip(
                                         .as_ref()
                                         .and_then(|b| b.bandaid_debt_warning.as_ref())
                                         .is_some();
+                                    let workaround_meta = cand
+                                        .blast_radius
+                                        .as_ref()
+                                        .and_then(|b| b.bandaid_probability)
+                                        .map(workaround_risk_tag);
+                                    let confidence_meta = cand
+                                        .blast_radius
+                                        .as_ref()
+                                        .and_then(|b| b.decision_confidence)
+                                        .map(audit_confidence_tag);
+                                    let has_calibrated_audit =
+                                        workaround_meta.is_some() || confidence_meta.is_some();
 
                                     let card_cls = match (is_sel, cand.status == CandidateStatus::FailedTests) {
                                         (true, true) => "epi-cand-card selected failed",
@@ -236,6 +249,27 @@ pub fn CandidateApproachesStrip(
                                                     </span>
                                                 </div>
                                             </div>
+
+                                            {has_calibrated_audit.then(|| view! {
+                                                <div class="epi-cand-calibrated-row">
+                                                    {workaround_meta.map(|(label, cls)| view! {
+                                                        <span
+                                                            class=cls
+                                                            title=format!("Calibrated symptom-workaround probability via {GEMINI_DECISION_MODEL}")
+                                                        >
+                                                            {label}
+                                                        </span>
+                                                    })}
+                                                    {confidence_meta.map(|(label, cls)| view! {
+                                                        <span
+                                                            class=cls
+                                                            title=format!("Mean calibrated audit confidence via {GEMINI_DECISION_MODEL}")
+                                                        >
+                                                            {label}
+                                                        </span>
+                                                    })}
+                                                </div>
+                                            })}
                                         </button>
                                     }
                                 }).collect_view()}
@@ -791,9 +825,25 @@ fn render_pareto_scatter(
                             let depth = c.blast_radius.as_ref().map(|b| b.root_cause_depth_score).unwrap_or(50.0);
                             let sp = c.arena_metrics.as_ref().map(|m| m.speedup_pct).unwrap_or(0.0);
                             let util = c.dual_utility_score();
+                            let mut breakdown = format!(
+                                "Risk {:.0}/100 · Root-Cause {:.0}/100 · Speedup {:+.1}% · Score {:.1}",
+                                risk, depth, sp, util
+                            );
+                            if let Some(bp) = c.blast_radius.as_ref().and_then(|b| b.bandaid_probability) {
+                                breakdown.push_str(&format!(
+                                    " · Workaround Risk {:.0}%",
+                                    crate::probability_percent(bp)
+                                ));
+                            }
+                            if let Some(conf) = c.blast_radius.as_ref().and_then(|b| b.decision_confidence) {
+                                breakdown.push_str(&format!(
+                                    " · Audit Confidence {:.0}%",
+                                    crate::probability_percent(conf)
+                                ));
+                            }
                             view! {
                                 <span style="color:#38bdf8; font-weight:700;">{title}</span>
-                                <span>{format!("Risk {:.0}/100 · Root-Cause {:.0}/100 · Speedup {:+.1}% · Score {:.1}", risk, depth, sp, util)}</span>
+                                <span>{breakdown}</span>
                             }.into_any()
                         }
                         None => view! {

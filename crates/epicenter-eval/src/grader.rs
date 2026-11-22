@@ -3,10 +3,12 @@ use crate::verify::parse_github_repo_slug;
 use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
 use epicenter_common::{
-    ArmOutcome, BlastRadiusReport, EvalArm, EvalIssueCase, MANAGED_AGENT_BASE,
+    ArmOutcome, BlastRadiusReport, EvalArm, EvalIssueCase, GraphNode, HazardSeverity,
+    SemanticHazard, MANAGED_AGENT_BASE,
 };
 use epicenter_gemini::{
-    CreateInteractionRequest, GeminiClient, InteractionEnvironment, ResponseFormat,
+    CreateDecisionRequest, CreateInteractionRequest, DecisionQuestion, DecisionResponse,
+    GeminiClient, InteractionEnvironment, ResponseFormat,
 };
 use epicenter_graph::{
     normalize_rel_path, parse_unified_diff, BlastAnalysisConfig, CoverageMap, FileDiff,
@@ -177,7 +179,7 @@ pub async fn grade_submission(
 
     match config.mode {
         GradingMode::HostSandbox => {
-            match grade_in_host_sandbox(case, submission, &parsed_candidate, config).await {
+            match grade_in_host_sandbox(case, submission, &parsed_candidate, gemini, config).await {
                 Ok(outcome) => outcome,
                 Err(err) => {
                     warn!(
@@ -1099,6 +1101,7 @@ async fn grade_in_host_sandbox(
     case: &EvalIssueCase,
     submission: &CandidateSubmission,
     parsed_candidate: &[FileDiff],
+    gemini: Option<&GeminiClient>,
     config: &GraderConfig,
 ) -> Result<ArmOutcome> {
     let gt_test_files: Vec<String> = parse_unified_diff(&case.ground_truth_test_patch)
@@ -1136,6 +1139,7 @@ async fn grade_in_host_sandbox(
         temp_root.path(),
         &worktree_path,
         &repo_key,
+        gemini,
         config,
     )
     .await;
@@ -1153,6 +1157,7 @@ async fn grade_inside_worktree(
     temp_root: &Path,
     worktree_path: &Path,
     repo_key: &str,
+    gemini: Option<&GeminiClient>,
     config: &GraderConfig,
 ) -> Result<ArmOutcome> {
     // 1. Apply candidate patch with real `git apply`.
@@ -1326,7 +1331,7 @@ async fn grade_inside_worktree(
 
     // 7. Compute real BlastRadiusReport from real checked-out repository files + real coverage.
     let real_sources = load_real_repo_sources(worktree_path, parsed_candidate);
-    let blast_report = if !real_sources.is_empty() {
+    let mut blast_report = if !real_sources.is_empty() {
         let graph = RepoCallGraph::from_sources(&real_sources);
         Some(graph.analyze_diff(
             &submission.git_diff,
@@ -1337,12 +1342,31 @@ async fn grade_inside_worktree(
         submission.reported_blast_radius.clone()
     };
 
+    // Calibrate baseline arms (when reported_blast_radius is None) apples-to-apples via gemini-decision-1.
+    let mut calibrated_root_cause_depth: Option<f32> = None;
+    if submission.reported_blast_radius.is_none() {
+        if let Some(ref mut report) = blast_report {
+            let problem_statement = format_case_problem_statement(case);
+            if calibrate_blast_radius_with_decisions(
+                gemini,
+                &problem_statement,
+                &submission.git_diff,
+                report,
+            )
+            .await
+            {
+                calibrated_root_cause_depth = Some(report.root_cause_depth_score);
+            }
+        }
+    }
+
     let dark_zones = blast_report.as_ref().map(BlastRadiusReport::dark_zone_count);
     let blast_risk = blast_report.as_ref().map(|b| b.composite_risk_score);
     let root_cause_depth = submission
         .reported_blast_radius
         .as_ref()
-        .map(|b| b.root_cause_depth_score);
+        .map(|b| b.root_cause_depth_score)
+        .or(calibrated_root_cause_depth);
 
     // Strictly derive resolved_ground_truth and regression_free from real OS exit codes.
     let resolved_ground_truth = gt_res.success && !gt_res.timed_out;
@@ -1476,7 +1500,7 @@ async fn grade_in_remote_sandbox(
 
     let verdict: RemoteSandboxVerdict = resp.extract_json()?;
 
-    let blast_report = if !verdict.touched_sources.is_empty() {
+    let mut blast_report = if !verdict.touched_sources.is_empty() {
         let cov = verdict
             .coverage_json
             .as_deref()
@@ -1491,12 +1515,30 @@ async fn grade_in_remote_sandbox(
         submission.reported_blast_radius.clone()
     };
 
+    let mut calibrated_root_cause_depth: Option<f32> = None;
+    if verdict.patch_applied && submission.reported_blast_radius.is_none() {
+        if let Some(ref mut report) = blast_report {
+            let problem_statement = format_case_problem_statement(case);
+            if calibrate_blast_radius_with_decisions(
+                Some(gemini),
+                &problem_statement,
+                &submission.git_diff,
+                report,
+            )
+            .await
+            {
+                calibrated_root_cause_depth = Some(report.root_cause_depth_score);
+            }
+        }
+    }
+
     let dark_zones = blast_report.as_ref().map(BlastRadiusReport::dark_zone_count);
     let blast_risk = blast_report.as_ref().map(|b| b.composite_risk_score);
     let root_cause_depth = submission
         .reported_blast_radius
         .as_ref()
-        .map(|b| b.root_cause_depth_score);
+        .map(|b| b.root_cause_depth_score)
+        .or(calibrated_root_cause_depth);
 
     let resolved = verdict.patch_applied && verdict.resolved_ground_truth;
     let reg_free = verdict.patch_applied && verdict.regression_free;
@@ -1555,4 +1597,409 @@ fn truncate_tail(s: &str, max_chars: usize) -> String {
     }
     let collected: String = s.chars().rev().take(max_chars).collect();
     format!("...{}", collected.chars().rev().collect::<String>())
+}
+
+const DECISIONS_CALIBRATION_TIMEOUT_SECS: u64 = 12;
+const HIGH_REGRESSION_HAZARD_THRESHOLD: f64 = 0.78;
+const MEDIUM_REGRESSION_HAZARD_THRESHOLD: f64 = 0.58;
+const BANDAID_WARNING_THRESHOLD: f64 = 0.65;
+
+fn truncate_head(s: &str, max_chars: usize) -> String {
+    let trimmed = s.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(max_chars).collect();
+    format!("{head}...")
+}
+
+fn format_case_problem_statement(case: &EvalIssueCase) -> String {
+    let body = if case.issue_body.trim().is_empty() {
+        "(No issue description body provided.)"
+    } else {
+        case.issue_body.trim()
+    };
+    format!("Issue #{}: {}\n\n{}", case.issue_number, case.title, body)
+}
+
+fn summarize_blast_nodes(nodes: &[GraphNode]) -> String {
+    const MAX_SUMMARY_NODES: usize = 12;
+    if nodes.is_empty() {
+        return "(none)".to_string();
+    }
+    let mut summary = nodes
+        .iter()
+        .take(MAX_SUMMARY_NODES)
+        .map(|n| {
+            let dz = if n.is_untested_dark_zone {
+                " [DARK ZONE]"
+            } else {
+                ""
+            };
+            format!("{} ({}:{}{})", n.symbol, n.file_path, n.line, dz)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    if nodes.len() > MAX_SUMMARY_NODES {
+        let extra = nodes.len() - MAX_SUMMARY_NODES;
+        summary.push_str(&format!(", ... (+{extra} more)"));
+    }
+    summary
+}
+
+/// Builds a `gemini-decision-1` request evaluating 5-level `root_cause_quality`,
+/// `is_symptom_bandaid`, and `regression_hazard` over the issue context, diff, and Ring 0/1/2 summary.
+pub fn build_blast_calibration_request(
+    problem_statement: &str,
+    candidate_diff: &str,
+    blast: &BlastRadiusReport,
+) -> CreateDecisionRequest {
+    let ring0 = summarize_blast_nodes(&blast.ring0_mutated);
+    let ring1 = summarize_blast_nodes(&blast.ring1_direct_callers);
+    let ring2 = summarize_blast_nodes(&blast.ring2_transitive_entrypoints);
+    let input = format!(
+        "PROBLEM STATEMENT:\n{}\n\n\
+         STRUCTURAL BLAST RADIUS:\n\
+         - Ring 0 (Mutated): {ring0}\n\
+         - Ring 1 (Direct Callers): {ring1}\n\
+         - Ring 2 (Transitive Entrypoints): {ring2}\n\
+         - Untested Dark Zones: {}\n\
+         - Base Structural Risk Score: {:.1}\n\n\
+         CANDIDATE DIFF:\n```diff\n{}\n```",
+        truncate_head(problem_statement, 2_500),
+        blast.dark_zone_count(),
+        blast.composite_risk_score,
+        truncate_head(candidate_diff, 8_000),
+    );
+
+    CreateDecisionRequest::new(input)
+        .with_question(
+            "root_cause_quality",
+            DecisionQuestion::score(
+                "Rate how deeply and cleanly this candidate diff cures the underlying root cause of the reported issue rather than masking symptoms.",
+                [
+                    "Incorrect or superficial patch that fails to address the defect or introduces clear breakage",
+                    "Symptom-only bandaid or narrow downstream guard that leaves the underlying root-cause invariant broken",
+                    "Partial fix that handles the reported case but misses related edge cases or caller assumptions",
+                    "Solid targeted fix that corrects the core defect logic cleanly without disturbing caller contracts",
+                    "Comprehensive architectural root-cause cure that restores the upstream invariant cleanly across callers and edge cases",
+                ],
+            ),
+        )
+        .with_question(
+            "is_symptom_bandaid",
+            DecisionQuestion::noul(
+                "Does this candidate diff merely mask symptoms with a narrow downstream guard or bandaid instead of curing the underlying root-cause invariant?",
+            ),
+        )
+        .with_question(
+            "regression_hazard",
+            DecisionQuestion::noul(
+                "Does this candidate diff pose a meaningful risk of causing behavioral regressions, contract breakages, or subtle side effects for Ring 1 or Ring 2 callers?",
+            ),
+        )
+}
+
+/// Pure calibration mapping from a `gemini-decision-1` `DecisionResponse` onto a `BlastRadiusReport`.
+///
+/// Updates `root_cause_depth_score`, `bandaid_probability`, `decision_confidence`, appends a
+/// calibrated `SemanticHazard` when `regression_hazard >= 0.58` (`High` if `>= 0.78`, else `Medium`),
+/// and recalculates `composite_risk_score`. Returns `true` if any calibration field was applied.
+pub fn apply_decision_calibration_to_blast_radius(
+    resp: &DecisionResponse,
+    blast: &mut BlastRadiusReport,
+) -> bool {
+    let existing_hazard_penalty: f32 = blast
+        .semantic_hazards
+        .iter()
+        .map(|h| h.severity.risk_weight())
+        .sum();
+    let base_score = (blast.composite_risk_score - existing_hazard_penalty).clamp(0.0, 100.0);
+
+    let mut applied = false;
+
+    if let Some(depth_score) = resp.score_normalized_100("root_cause_quality", 5) {
+        blast.root_cause_depth_score = depth_score;
+        applied = true;
+    }
+
+    if let Some(bandaid_prob) = resp.noul_prob("is_symptom_bandaid") {
+        let clamped = (bandaid_prob as f32).clamp(0.0, 1.0);
+        blast.bandaid_probability = Some(clamped);
+        if bandaid_prob >= BANDAID_WARNING_THRESHOLD && blast.bandaid_debt_warning.is_none() {
+            blast.bandaid_debt_warning = Some(format!(
+                "Calibrated Decisions audit flagged likely symptom-only bandaid ({:.0}% probability).",
+                (bandaid_prob * 100.0).clamp(0.0, 100.0)
+            ));
+        }
+        applied = true;
+    }
+
+    if let Some(reg_prob) = resp.noul_prob("regression_hazard") {
+        applied = true;
+        let severity = if reg_prob >= HIGH_REGRESSION_HAZARD_THRESHOLD {
+            Some(HazardSeverity::High)
+        } else if reg_prob >= MEDIUM_REGRESSION_HAZARD_THRESHOLD {
+            Some(HazardSeverity::Medium)
+        } else {
+            None
+        };
+        if let Some(severity) = severity {
+            let symbol = blast
+                .ring0_mutated
+                .first()
+                .map(|n| n.symbol.clone())
+                .unwrap_or_else(|| "diff".to_string());
+            blast.semantic_hazards.push(SemanticHazard {
+                severity,
+                category: "calibrated_regression_hazard".to_string(),
+                symbol,
+                explanation: format!(
+                    "gemini-decision-1 estimated {:.0}% regression hazard across impacted callers (Ring 1: {}, Ring 2: {}).",
+                    (reg_prob * 100.0).clamp(0.0, 100.0),
+                    blast.ring1_direct_callers.len(),
+                    blast.ring2_transitive_entrypoints.len(),
+                ),
+                mitigation: "Add targeted caller regression tests covering Ring 1/Ring 2 entrypoints and verify contract invariants.".to_string(),
+            });
+        }
+    }
+
+    let confidences: Vec<f64> = ["root_cause_quality", "is_symptom_bandaid", "regression_hazard"]
+        .into_iter()
+        .filter_map(|k| resp.confidence(k))
+        .collect();
+    if !confidences.is_empty() {
+        let mean_conf = confidences.iter().sum::<f64>() / confidences.len() as f64;
+        blast.decision_confidence = Some((mean_conf as f32).clamp(0.0, 1.0));
+        applied = true;
+    }
+
+    if applied {
+        blast.recalculate_composite_risk(base_score);
+    }
+
+    applied
+}
+
+/// Calibrates a structural `BlastRadiusReport` using `gemini-decision-1` (bounded by a 12s timeout).
+///
+/// Graceful no-op returning `false` if `gemini` is `None` or the Decisions API call fails/times out.
+pub async fn calibrate_blast_radius_with_decisions(
+    gemini: Option<&GeminiClient>,
+    problem_statement: &str,
+    candidate_diff: &str,
+    blast: &mut BlastRadiusReport,
+) -> bool {
+    let Some(client) = gemini else {
+        return false;
+    };
+    let req = build_blast_calibration_request(problem_statement, candidate_diff, blast);
+    match tokio::time::timeout(
+        Duration::from_secs(DECISIONS_CALIBRATION_TIMEOUT_SECS),
+        client.evaluate_decisions(&req),
+    )
+    .await
+    {
+        Ok(Ok(resp)) => apply_decision_calibration_to_blast_radius(&resp, blast),
+        Ok(Err(err)) => {
+            warn!(%err, "gemini-decision-1 blast radius calibration failed (graceful no-op)");
+            false
+        }
+        Err(_) => {
+            warn!(
+                timeout_secs = DECISIONS_CALIBRATION_TIMEOUT_SECS,
+                "gemini-decision-1 blast radius calibration timed out (graceful no-op)"
+            );
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use epicenter_common::{ImpactRing, GEMINI_DECISION_MODEL};
+    use epicenter_gemini::{DecisionAnswer, InteractionInput};
+
+    fn sample_blast(base_risk: f32) -> BlastRadiusReport {
+        BlastRadiusReport {
+            ring0_mutated: vec![GraphNode {
+                id: "n0".to_string(),
+                symbol: "normalize_env".to_string(),
+                file_path: "src/calc/core.py".to_string(),
+                line: 14,
+                ring: ImpactRing::Ring0,
+                test_coverage_pct: Some(75.0),
+                is_untested_dark_zone: false,
+                radial_x: 0.0,
+                radial_y: 0.0,
+            }],
+            ring1_direct_callers: vec![GraphNode {
+                id: "n1".to_string(),
+                symbol: "run_cli".to_string(),
+                file_path: "src/calc/cli.py".to_string(),
+                line: 88,
+                ring: ImpactRing::Ring1,
+                test_coverage_pct: None,
+                is_untested_dark_zone: true,
+                radial_x: 1.0,
+                radial_y: 0.0,
+            }],
+            ring2_transitive_entrypoints: vec![GraphNode {
+                id: "n2".to_string(),
+                symbol: "main".to_string(),
+                file_path: "src/calc/__main__.py".to_string(),
+                line: 5,
+                ring: ImpactRing::Ring2,
+                test_coverage_pct: None,
+                is_untested_dark_zone: true,
+                radial_x: 2.0,
+                radial_y: 0.0,
+            }],
+            edges: Vec::new(),
+            semantic_hazards: Vec::new(),
+            composite_risk_score: base_risk,
+            root_cause_depth_score: 50.0,
+            bandaid_debt_warning: None,
+            bandaid_probability: None,
+            decision_confidence: None,
+        }
+    }
+
+    fn make_decision_response(
+        root_cause_score: f64,
+        bandaid_prob: f64,
+        regression_prob: f64,
+        confs: (f64, f64, f64),
+    ) -> DecisionResponse {
+        let mut answers = BTreeMap::new();
+        answers.insert(
+            "root_cause_quality".to_string(),
+            DecisionAnswer::Score {
+                score: root_cause_score,
+                legend: BTreeMap::new(),
+                probabilities: BTreeMap::new(),
+                confidence: confs.0,
+            },
+        );
+        answers.insert(
+            "is_symptom_bandaid".to_string(),
+            DecisionAnswer::Noul {
+                noul: bandaid_prob,
+                confidence: confs.1,
+            },
+        );
+        answers.insert(
+            "regression_hazard".to_string(),
+            DecisionAnswer::Noul {
+                noul: regression_prob,
+                confidence: confs.2,
+            },
+        );
+        DecisionResponse {
+            answers,
+            usage: None,
+        }
+    }
+
+    #[test]
+    fn calibrates_blast_radius_from_decision_response_high_quality() {
+        let mut blast = sample_blast(20.0);
+        let resp = make_decision_response(3.2, 0.12, 0.30, (0.88, 0.90, 0.86));
+
+        assert!(apply_decision_calibration_to_blast_radius(&resp, &mut blast));
+        assert!((blast.root_cause_depth_score - 80.0).abs() < 0.01);
+        assert!((blast.bandaid_probability.unwrap() - 0.12).abs() < 0.001);
+        assert!((blast.decision_confidence.unwrap() - 0.88).abs() < 0.001);
+        assert!(blast.bandaid_debt_warning.is_none());
+        assert!(blast.semantic_hazards.is_empty());
+        assert!((blast.composite_risk_score - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calibrates_blast_radius_from_decision_response_bandaid_and_hazards() {
+        let mut high_blast = sample_blast(85.0);
+        let high_resp = make_decision_response(0.4, 0.91, 0.81, (0.92, 0.95, 0.83));
+
+        assert!(apply_decision_calibration_to_blast_radius(
+            &high_resp,
+            &mut high_blast
+        ));
+        assert!((high_blast.root_cause_depth_score - 10.0).abs() < 0.01);
+        assert!((high_blast.bandaid_probability.unwrap() - 0.91).abs() < 0.001);
+        assert!((high_blast.decision_confidence.unwrap() - 0.90).abs() < 0.001);
+        assert!(high_blast.bandaid_debt_warning.is_some());
+        assert_eq!(high_blast.semantic_hazards.len(), 1);
+        assert_eq!(high_blast.semantic_hazards[0].severity, HazardSeverity::High);
+        assert_eq!(high_blast.semantic_hazards[0].symbol, "normalize_env");
+        // 85.0 + 20.0 clamped to 100.0
+        assert!((high_blast.composite_risk_score - 100.0).abs() < 0.01);
+
+        let mut med_blast = sample_blast(31.0);
+        let med_resp = make_decision_response(2.4, 0.35, 0.60, (0.80, 0.78, 0.82));
+        assert!(apply_decision_calibration_to_blast_radius(
+            &med_resp,
+            &mut med_blast
+        ));
+        assert!((med_blast.root_cause_depth_score - 60.0).abs() < 0.01);
+        assert_eq!(med_blast.semantic_hazards.len(), 1);
+        assert_eq!(med_blast.semantic_hazards[0].severity, HazardSeverity::Medium);
+        assert!((med_blast.composite_risk_score - 41.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calibration_request_includes_rubric_questions_and_ring_summary() {
+        let blast = sample_blast(24.0);
+        let req = build_blast_calibration_request(
+            "Issue #42: empty env crashes normalize_env",
+            "diff --git a/src/calc/core.py b/src/calc/core.py\n+    if not seq: return []",
+            &blast,
+        );
+        assert_eq!(req.model, GEMINI_DECISION_MODEL);
+        assert_eq!(req.questions.len(), 3);
+        match req.questions.get("root_cause_quality") {
+            Some(DecisionQuestion::Score { criteria, .. }) => assert_eq!(criteria.len(), 5),
+            other => panic!("expected 5-level Score question, got {other:?}"),
+        }
+        assert!(matches!(
+            req.questions.get("is_symptom_bandaid"),
+            Some(DecisionQuestion::Noul { .. })
+        ));
+        assert!(matches!(
+            req.questions.get("regression_hazard"),
+            Some(DecisionQuestion::Noul { .. })
+        ));
+        match &req.input {
+            InteractionInput::Text(text) => {
+                assert!(text.contains("normalize_env"));
+                assert!(text.contains("run_cli"));
+                assert!(text.contains("main"));
+                assert!(text.contains("[DARK ZONE]"));
+            }
+            other => panic!("expected text input, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn calibration_noop_without_gemini_or_empty_response() {
+        let mut blast = sample_blast(16.0);
+        assert!(!apply_decision_calibration_to_blast_radius(
+            &DecisionResponse::default(),
+            &mut blast
+        ));
+        assert!((blast.root_cause_depth_score - 50.0).abs() < 0.01);
+        assert!(blast.bandaid_probability.is_none());
+        assert!(blast.decision_confidence.is_none());
+
+        let applied = calibrate_blast_radius_with_decisions(
+            None,
+            "Issue #42",
+            "diff --git a/src/calc/core.py b/src/calc/core.py",
+            &mut blast,
+        )
+        .await;
+        assert!(!applied);
+        assert!((blast.composite_risk_score - 16.0).abs() < 0.01);
+    }
 }

@@ -69,6 +69,24 @@ pub async fn run_offline_demo_tournament(
         ];
     }
 
+    if session.intake.unit_testable_probability.is_none() {
+        session.intake.unit_testable_probability = Some(0.94);
+    }
+    if session.intake.suggested_k.is_none() {
+        session.intake.suggested_k = Some(3);
+    }
+    emit_log(
+        &event_tx,
+        session_id,
+        LogLevel::Info,
+        "intake",
+        format!(
+            "gemini-decision-1 triage (offline demo): unit_testable={:.0}%, suggested_k={}, top_files=[app/pricing.py (97%), app/billing.py (88%), app/routes.py (64%)]",
+            session.intake.unit_testable_probability.unwrap_or(0.94) * 100.0,
+            session.intake.suggested_k.unwrap_or(3),
+        ),
+    );
+
     if !attachments.is_empty() {
         for att in &attachments {
             session.intake.multimodal_findings.push(MultimodalFinding {
