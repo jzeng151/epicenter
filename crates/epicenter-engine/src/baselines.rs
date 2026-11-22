@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::time::Duration;
 
-const BASELINE_POLL_INTERVAL: Duration = Duration::from_secs(3);
-const BASELINE_TIMEOUT: Duration = Duration::from_secs(300);
+const BASELINE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const BASELINE_TIMEOUT: Duration = Duration::from_secs(150);
 
 /// Arm 1 Baseline: Single `gemini-4-neon` model call (no Managed Agent loop, no tournament)
 /// returning a unified `git diff`.
@@ -51,7 +51,7 @@ pub async fn execute_single_model_baseline(
             .to_string(),
     );
     req.generation_config = Some(GenerationConfig {
-        thinking_level: Some("medium".to_string()),
+        thinking_level: Some("low".to_string()),
         ..Default::default()
     });
 

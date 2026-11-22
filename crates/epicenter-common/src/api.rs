@@ -1,5 +1,5 @@
 use crate::domain::{AttachmentMeta, TaskKind, TournamentSession, TournamentStage};
-use crate::eval::FiveSigmaEval;
+use crate::eval::{EvalArm, FiveSigmaEval};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -89,4 +89,38 @@ pub struct LiveJudgePrRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveJudgePrResponse {
     pub eval: FiveSigmaEval,
+}
+
+/// Lifecycle state of an asynchronous Live PR Benchmark job (`POST /api/eval/judge-pr/start`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveJudgeJobState {
+    Running,
+    Completed,
+    Failed,
+}
+
+/// Per-arm live progress telemetry polled by `GET /api/eval/judge-pr/{job_id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveJudgeArmProgress {
+    pub arm: EvalArm,
+    pub state: LiveJudgeJobState,
+    pub detail: String,
+    pub elapsed_ms: u64,
+}
+
+/// Asynchronous status & final payload for `POST /api/eval/judge-pr/start` and `GET /api/eval/judge-pr/{job_id}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveJudgeJobStatusResponse {
+    pub job_id: Uuid,
+    pub pr_url: String,
+    #[serde(default)]
+    pub pr_title: Option<String>,
+    pub state: LiveJudgeJobState,
+    pub elapsed_ms: u64,
+    pub arms: Vec<LiveJudgeArmProgress>,
+    #[serde(default)]
+    pub eval: Option<FiveSigmaEval>,
+    #[serde(default)]
+    pub error: Option<String>,
 }

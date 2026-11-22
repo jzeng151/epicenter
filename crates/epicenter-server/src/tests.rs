@@ -1269,3 +1269,54 @@ fn startup_orphan_cleanup_marks_in_progress_sessions_failed() {
     let after_done = db.get_session(completed.id).unwrap().unwrap();
     assert_eq!(after_done.stage, TournamentStage::Completed);
 }
+
+#[tokio::test]
+async fn live_judge_async_job_validates_url_and_tracks_three_arms() {
+    let state = test_state();
+
+    // Invalid PR URL rejects synchronously with 400 Bad Request before spawning a job.
+    let bad_res = crate::routes::start_judge_pr_handler(
+        State(state.clone()),
+        Json(epicenter_common::LiveJudgePrRequest {
+            pr_url: "https://github.com/jzeng151/epicenter".to_string(),
+        }),
+    )
+    .await;
+    assert!(bad_res.is_err());
+
+    // Valid PR URL format initializes an async job with all 3 arms tracked and retrievable via GET.
+    let mut job = epicenter_common::LiveJudgeJobStatusResponse {
+        job_id: Uuid::new_v4(),
+        pr_url: "https://github.com/jzeng151/hermes-lyre/pull/58".to_string(),
+        pr_title: Some("jzeng151/hermes-lyre#58".to_string()),
+        state: epicenter_common::LiveJudgeJobState::Running,
+        elapsed_ms: 1200,
+        arms: EvalArm::all()
+            .iter()
+            .map(|&arm| epicenter_common::LiveJudgeArmProgress {
+                arm,
+                state: epicenter_common::LiveJudgeJobState::Running,
+                detail: "Running…".to_string(),
+                elapsed_ms: 1200,
+            })
+            .collect(),
+        eval: None,
+        error: None,
+    };
+    state.set_judge_job(job.clone());
+
+    let Json(fetched) =
+        crate::routes::get_judge_pr_job_handler(State(state.clone()), Path(job.job_id))
+            .await
+            .expect("job retrievable");
+    assert_eq!(fetched.job_id, job.job_id);
+    assert_eq!(fetched.arms.len(), 3);
+    assert_eq!(fetched.state, epicenter_common::LiveJudgeJobState::Running);
+
+    job.state = epicenter_common::LiveJudgeJobState::Completed;
+    state.set_judge_job(job.clone());
+    let Json(done) = crate::routes::get_judge_pr_job_handler(State(state), Path(job.job_id))
+        .await
+        .expect("completed job retrievable");
+    assert_eq!(done.state, epicenter_common::LiveJudgeJobState::Completed);
+}

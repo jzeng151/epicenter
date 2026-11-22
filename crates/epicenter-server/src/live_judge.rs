@@ -1,14 +1,16 @@
 use crate::db::infer_media_kind;
 use crate::github::{
-    parse_github_repo_url, parse_unified_diff as parse_github_diff, FetchedPrContext,
+    parse_github_pr_url, parse_github_repo_url, parse_unified_diff as parse_github_diff,
+    FetchedPrContext,
 };
 use crate::media::TempDirGuard;
 use crate::state::AppState;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::Utc;
 use epicenter_common::{
     ArmOutcome, AttachmentMeta, BlastRadiusReport, CreateSessionRequest, EvalArm, EvalIssueCase,
-    EvalScorecard, EvalSplit, FiveSigmaEval, LiveJudgePrRequest, LiveJudgePrResponse, TaskKind,
+    EvalScorecard, EvalSplit, FiveSigmaEval, LiveEvent, LiveJudgeArmProgress, LiveJudgeJobState,
+    LiveJudgeJobStatusResponse, LiveJudgePrRequest, LiveJudgePrResponse, TaskKind, TournamentStage,
 };
 use epicenter_engine::{EngineRunOptions, TournamentEngine, UploadedAttachmentBytes};
 use epicenter_graph::{
@@ -20,12 +22,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::process::Command;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{broadcast, oneshot, Mutex as AsyncMutex};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-/// Default host cache directory for cloned bare/no-checkout git mirrors.
-pub const DEFAULT_REPO_CACHE_ROOT: &str = "/tmp/epicenter-cache/repos";
+/// Dedicated host cache directory for Live Judge mirrors & venvs (isolated from `HostVerifier`
+/// so concurrent Arm 1/2 grading and Arm 3 tournament runs never contend on `.git` locks).
+pub const DEFAULT_REPO_CACHE_ROOT: &str = "/tmp/epicenter-cache/judge/repos";
 
 const GIT_CLONE_TIMEOUT_SECS: u64 = 120;
 const ENV_SETUP_TIMEOUT_SECS: u64 = 120;
@@ -96,16 +99,237 @@ pub async fn run_live_judge_pr(
     req: &LiveJudgePrRequest,
 ) -> Result<LiveJudgePrResponse> {
     let ctx = state.github.fetch_pr_context(&req.pr_url).await?;
+    if ctx.ground_truth_test_patch.trim().is_empty() {
+        bail!(
+            "PR {}/{}#{} does not add or modify any test files, so there are no withheld PR tests to grade against. Paste a merged PR that includes test changes.",
+            ctx.slug.owner,
+            ctx.slug.repo,
+            ctx.slug.number
+        );
+    }
     let eval = evaluate_fetched_pr(state, ctx).await?;
     state.db.upsert_eval_run(&eval)?;
     Ok(LiveJudgePrResponse { eval })
 }
 
-/// Evaluates an already-fetched GitHub PR context across all 3 arms using real independent
-/// host-side verification (`git apply` + hidden `ground_truth_test_patch` + real test execution).
+/// Validates `req.pr_url` immediately and spawns an asynchronous background 3-arm Live PR Benchmark
+/// job with per-arm progress telemetry (`GET /api/eval/judge-pr/{job_id}`).
+pub fn start_live_judge_pr_job(
+    state: &AppState,
+    req: &LiveJudgePrRequest,
+) -> Result<LiveJudgeJobStatusResponse> {
+    let pr_url = req.pr_url.trim().to_string();
+    let slug = parse_github_pr_url(&pr_url)?;
+    let job_id = Uuid::new_v4();
+
+    let initial = LiveJudgeJobStatusResponse {
+        job_id,
+        pr_url: pr_url.clone(),
+        pr_title: Some(format!("{}/{}#{}", slug.owner, slug.repo, slug.number)),
+        state: LiveJudgeJobState::Running,
+        elapsed_ms: 0,
+        arms: vec![
+            LiveJudgeArmProgress {
+                arm: EvalArm::SingleModelCall,
+                state: LiveJudgeJobState::Running,
+                detail: "Fetching PR metadata & pre-fix commit from GitHub…".to_string(),
+                elapsed_ms: 0,
+            },
+            LiveJudgeArmProgress {
+                arm: EvalArm::SingleManagedAgent,
+                state: LiveJudgeJobState::Running,
+                detail: "Fetching PR metadata & pre-fix commit from GitHub…".to_string(),
+                elapsed_ms: 0,
+            },
+            LiveJudgeArmProgress {
+                arm: EvalArm::EpicenterTournament,
+                state: LiveJudgeJobState::Running,
+                detail: "Fetching PR metadata & pre-fix commit from GitHub…".to_string(),
+                elapsed_ms: 0,
+            },
+        ],
+        eval: None,
+        error: None,
+    };
+    state.set_judge_job(initial.clone());
+
+    let state_bg = state.clone();
+    tokio::spawn(async move {
+        let job_start = Instant::now();
+        let (tick_stop_tx, mut tick_stop_rx) = oneshot::channel::<()>();
+
+        // Smooth 1s elapsed-time ticker for UI polling while LLM / test commands execute.
+        let ticker_state = state_bg.clone();
+        let ticker_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = &mut tick_stop_rx => break,
+                    _ = interval.tick() => {
+                        let ms = job_start.elapsed().as_millis() as u64;
+                        ticker_state.update_judge_job(job_id, |job| {
+                            if job.state == LiveJudgeJobState::Running {
+                                job.elapsed_ms = ms;
+                                for a in &mut job.arms {
+                                    if a.state == LiveJudgeJobState::Running {
+                                        a.elapsed_ms = ms;
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        });
+
+        let ctx = match state_bg.github.fetch_pr_context(&pr_url).await {
+            Ok(c) => c,
+            Err(err) => {
+                let _ = tick_stop_tx.send(());
+                let _ = ticker_handle.await;
+                let msg = format!("Failed fetching PR from GitHub: {err}");
+                let elapsed = job_start.elapsed().as_millis() as u64;
+                state_bg.update_judge_job(job_id, |job| {
+                    job.state = LiveJudgeJobState::Failed;
+                    job.elapsed_ms = elapsed;
+                    job.error = Some(msg.clone());
+                    for a in &mut job.arms {
+                        a.state = LiveJudgeJobState::Failed;
+                        a.detail = "Stopped (GitHub fetch failed)".to_string();
+                    }
+                });
+                return;
+            }
+        };
+
+        if ctx.ground_truth_test_patch.trim().is_empty() {
+            let _ = tick_stop_tx.send(());
+            let _ = ticker_handle.await;
+            let msg = format!(
+                "PR {}/{}#{} does not add or modify any test files, so there are no withheld PR tests to grade against. Paste a merged bug-fix PR that includes test changes.",
+                ctx.slug.owner, ctx.slug.repo, ctx.slug.number
+            );
+            let elapsed = job_start.elapsed().as_millis() as u64;
+            state_bg.update_judge_job(job_id, |job| {
+                job.pr_title = Some(format!(
+                    "{}/{}#{} — {}",
+                    ctx.slug.owner, ctx.slug.repo, ctx.slug.number, ctx.title
+                ));
+                job.state = LiveJudgeJobState::Failed;
+                job.elapsed_ms = elapsed;
+                job.error = Some(msg);
+                for a in &mut job.arms {
+                    a.state = LiveJudgeJobState::Failed;
+                    a.detail = "PR contains no test file changes to grade against".to_string();
+                }
+            });
+            return;
+        }
+
+        state_bg.update_judge_job(job_id, |job| {
+            job.pr_title = Some(format!(
+                "{}/{}#{} — {}",
+                ctx.slug.owner, ctx.slug.repo, ctx.slug.number, ctx.title
+            ));
+        });
+
+        let eval_res = evaluate_fetched_pr_tracked(&state_bg, ctx, Some(job_id)).await;
+        let _ = tick_stop_tx.send(());
+        let _ = ticker_handle.await;
+        let total_elapsed = job_start.elapsed().as_millis() as u64;
+
+        match eval_res {
+            Ok(eval) => {
+                if let Err(err) = state_bg.db.upsert_eval_run(&eval) {
+                    warn!(%job_id, %err, "failed persisting completed live judge eval run");
+                } else {
+                    info!(%job_id, label = %eval.label, "live judge PR evaluation completed");
+                }
+                state_bg.update_judge_job(job_id, |job| {
+                    job.state = LiveJudgeJobState::Completed;
+                    job.elapsed_ms = total_elapsed;
+                    job.eval = Some(eval);
+                });
+            }
+            Err(err) => {
+                state_bg.update_judge_job(job_id, |job| {
+                    job.state = LiveJudgeJobState::Failed;
+                    job.elapsed_ms = total_elapsed;
+                    job.error = Some(err.to_string());
+                });
+            }
+        }
+    });
+
+    Ok(initial)
+}
+
+fn set_arm_progress(
+    state: &AppState,
+    job_id: Option<Uuid>,
+    arm: EvalArm,
+    arm_state: LiveJudgeJobState,
+    detail: impl Into<String>,
+    elapsed_ms: Option<u64>,
+) {
+    let Some(jid) = job_id else {
+        return;
+    };
+    let detail_str = detail.into();
+    state.update_judge_job(jid, |job| {
+        if let Some(entry) = job.arms.iter_mut().find(|a| a.arm == arm) {
+            entry.state = arm_state;
+            entry.detail = detail_str;
+            if let Some(ms) = elapsed_ms {
+                entry.elapsed_ms = ms;
+            }
+        }
+    });
+}
+
+fn finish_arm_progress(state: &AppState, job_id: Option<Uuid>, outcome: &ArmOutcome) {
+    let summary = if outcome.resolved_ground_truth && outcome.regression_free {
+        "Passed withheld PR tests & existing suite".to_string()
+    } else if outcome.resolved_ground_truth {
+        "Passed PR tests (existing suite regressed)".to_string()
+    } else {
+        match outcome.failure_category.as_deref() {
+            Some("empty_patch") | Some("empty_or_unparseable_diff") => {
+                "Finished — no valid patch produced".to_string()
+            }
+            Some("patch_apply_conflict") => "Finished — patch failed to apply cleanly".to_string(),
+            Some("test_tampering_violation") => {
+                "Disqualified — modified locked PR test file".to_string()
+            }
+            Some("ground_truth_test_failed") => {
+                "Finished — failed withheld PR verification tests".to_string()
+            }
+            _ => "Finished — did not pass withheld PR tests".to_string(),
+        }
+    };
+    set_arm_progress(
+        state,
+        job_id,
+        outcome.arm,
+        LiveJudgeJobState::Completed,
+        summary,
+        Some(outcome.duration_ms),
+    );
+}
+
+/// Evaluates an already-fetched GitHub PR context across all 3 arms CONCURRENTLY using real
+/// independent host-side verification (`git apply` + hidden `ground_truth_test_patch` + real test execution).
 pub async fn evaluate_fetched_pr(
     state: &AppState,
     ctx: FetchedPrContext,
+) -> Result<FiveSigmaEval> {
+    evaluate_fetched_pr_tracked(state, ctx, None).await
+}
+
+async fn evaluate_fetched_pr_tracked(
+    state: &AppState,
+    ctx: FetchedPrContext,
+    job_id: Option<Uuid>,
 ) -> Result<FiveSigmaEval> {
     let case_id = format!(
         "{}-{}-pr-{}",
@@ -127,14 +351,12 @@ pub async fn evaluate_fetched_pr(
         split: EvalSplit::LiveJudge,
     };
 
-    // Arm 1: Single Model Call
-    let arm1_outcome = run_arm1_single_model(state, &case_id, &ctx, &problem_statement).await;
-
-    // Arm 2: Single Managed Agent
-    let arm2_outcome = run_arm2_single_agent(state, &case_id, &ctx, &problem_statement).await;
-
-    // Arm 3: Epicenter Tournament
-    let arm3_outcome = run_arm3_tournament(state, &case_id, &ctx, &problem_statement).await;
+    // Run all 3 arms concurrently instead of sequentially!
+    let (arm1_outcome, arm2_outcome, arm3_outcome) = tokio::join!(
+        run_arm1_single_model(state, &case_id, &ctx, &problem_statement, job_id),
+        run_arm2_single_agent(state, &case_id, &ctx, &problem_statement, job_id),
+        run_arm3_tournament(state, &case_id, &ctx, &problem_statement, job_id),
+    );
 
     let cases = vec![issue_case];
     let outcomes = vec![arm1_outcome, arm2_outcome, arm3_outcome];
@@ -169,9 +391,18 @@ async fn run_arm1_single_model(
     case_id: &str,
     ctx: &FetchedPrContext,
     problem_statement: &str,
+    job_id: Option<Uuid>,
 ) -> ArmOutcome {
     let start = Instant::now();
-    match state
+    set_arm_progress(
+        state,
+        job_id,
+        EvalArm::SingleModelCall,
+        LiveJudgeJobState::Running,
+        "Generating single-prompt patch (Gemini 4 Neon)…",
+        None,
+    );
+    let outcome = match state
         .engine
         .run_single_model_baseline(
             &ctx.repo_url,
@@ -182,6 +413,14 @@ async fn run_arm1_single_model(
         .await
     {
         Ok(diff) => {
+            set_arm_progress(
+                state,
+                job_id,
+                EvalArm::SingleModelCall,
+                LiveJudgeJobState::Running,
+                "Running withheld PR tests on host worktree…",
+                None,
+            );
             let verdict = verify_candidate_on_host(
                 &ctx.repo_url,
                 &ctx.parent_commit,
@@ -213,7 +452,9 @@ async fn run_arm1_single_model(
             notes: Some(format!("Arm 1 failed: {err}")),
             failure_category: Some("arm1_execution_error".to_string()),
         },
-    }
+    };
+    finish_arm_progress(state, job_id, &outcome);
+    outcome
 }
 
 async fn run_arm2_single_agent(
@@ -221,9 +462,18 @@ async fn run_arm2_single_agent(
     case_id: &str,
     ctx: &FetchedPrContext,
     problem_statement: &str,
+    job_id: Option<Uuid>,
 ) -> ArmOutcome {
     let start = Instant::now();
-    match state
+    set_arm_progress(
+        state,
+        job_id,
+        EvalArm::SingleManagedAgent,
+        LiveJudgeJobState::Running,
+        "Running single coding agent sandbox (up to 2.5m)…",
+        None,
+    );
+    let outcome = match state
         .engine
         .run_single_managed_agent_baseline(
             &ctx.repo_url,
@@ -233,6 +483,14 @@ async fn run_arm2_single_agent(
         .await
     {
         Ok(diff) => {
+            set_arm_progress(
+                state,
+                job_id,
+                EvalArm::SingleManagedAgent,
+                LiveJudgeJobState::Running,
+                "Running withheld PR tests on host worktree…",
+                None,
+            );
             let verdict = verify_candidate_on_host(
                 &ctx.repo_url,
                 &ctx.parent_commit,
@@ -264,6 +522,21 @@ async fn run_arm2_single_agent(
             notes: Some(format!("Arm 2 failed: {err}")),
             failure_category: Some("arm2_execution_error".to_string()),
         },
+    };
+    finish_arm_progress(state, job_id, &outcome);
+    outcome
+}
+
+fn friendly_tournament_stage(stage: TournamentStage) -> &'static str {
+    match stage {
+        TournamentStage::Intake => "Stage 1/6 — Extracting clues & setting up local repo…",
+        TournamentStage::RedGate => "Stage 2/6 — Writing & locking failing reproduction test…",
+        TournamentStage::Planning => "Stage 3/6 — Planning distinct implementation approaches…",
+        TournamentStage::Executing => "Stage 4/6 — Building & testing fixes in parallel worktrees…",
+        TournamentStage::Benchmarking => "Stage 5/6 — Benchmarking passing fixes side-by-side…",
+        TournamentStage::Auditing => "Stage 6/6 — Checking caller impact & root-cause quality…",
+        TournamentStage::Completed => "Comparison finished — grading winner against PR tests…",
+        TournamentStage::Failed => "Comparison stopped early",
     }
 }
 
@@ -272,8 +545,17 @@ async fn run_arm3_tournament(
     case_id: &str,
     ctx: &FetchedPrContext,
     problem_statement: &str,
+    job_id: Option<Uuid>,
 ) -> ArmOutcome {
     let start = Instant::now();
+    set_arm_progress(
+        state,
+        job_id,
+        EvalArm::EpicenterTournament,
+        LiveJudgeJobState::Running,
+        "Preparing repo & downloading issue attachments…",
+        None,
+    );
 
     // Download reachable PR media URLs (15s timeout, max 15MB) and pass them as real multimodal attachments.
     let uploaded_attachments = download_pr_media_attachments(&ctx.media_urls).await;
@@ -298,11 +580,35 @@ async fn run_arm3_tournament(
         github_token: state.github.token().map(str::to_string),
     };
 
-    match state
+    let (ev_tx, mut ev_rx) = broadcast::channel::<LiveEvent>(128);
+    let progress_handle = job_id.map(|jid| {
+        let st = state.clone();
+        tokio::spawn(async move {
+            while let Ok(ev) = ev_rx.recv().await {
+                if let LiveEvent::StageChanged { stage, .. } = ev {
+                    set_arm_progress(
+                        &st,
+                        Some(jid),
+                        EvalArm::EpicenterTournament,
+                        LiveJudgeJobState::Running,
+                        friendly_tournament_stage(stage),
+                        None,
+                    );
+                }
+            }
+        })
+    });
+
+    let run_res = state
         .engine
-        .execute_session(initial, uploaded_attachments, opts, None)
-        .await
-    {
+        .execute_session(initial, uploaded_attachments, opts, Some(ev_tx))
+        .await;
+
+    if let Some(h) = progress_handle {
+        let _ = h.await;
+    }
+
+    let outcome = match run_res {
         Ok(output) => {
             let recommended_id = output
                 .session
@@ -319,10 +625,17 @@ async fn run_arm3_tournament(
                         .find(|c| c.strategy_id == id)
                 })
                 .or_else(|| output.session.candidates.iter().find(|c| c.is_green()))
+                .or_else(|| {
+                    output
+                        .session
+                        .candidates
+                        .iter()
+                        .find(|c| !c.git_diff.trim().is_empty())
+                })
                 .or_else(|| output.session.candidates.first());
 
             let Some(cand) = winner else {
-                return ArmOutcome {
+                let empty_out = ArmOutcome {
                     case_id: case_id.to_string(),
                     arm: EvalArm::EpicenterTournament,
                     resolved_ground_truth: false,
@@ -335,7 +648,21 @@ async fn run_arm3_tournament(
                     notes: Some("Tournament produced no candidates".to_string()),
                     failure_category: Some("no_candidates".to_string()),
                 };
+                finish_arm_progress(state, job_id, &empty_out);
+                return empty_out;
             };
+
+            set_arm_progress(
+                state,
+                job_id,
+                EvalArm::EpicenterTournament,
+                LiveJudgeJobState::Running,
+                format!(
+                    "Running withheld PR tests on winner '{}'…",
+                    cand.strategy_id
+                ),
+                None,
+            );
 
             // Independently verify the tournament winner on host against the hidden ground-truth
             // test patch and module regression suite — NEVER trust self-reported cand.is_green().
@@ -382,7 +709,9 @@ async fn run_arm3_tournament(
             notes: Some(format!("Arm 3 tournament failed: {err}")),
             failure_category: Some("arm3_execution_error".to_string()),
         },
-    }
+    };
+    finish_arm_progress(state, job_id, &outcome);
+    outcome
 }
 
 fn outcome_from_verdict(
@@ -825,6 +1154,28 @@ async fn run_python_verification(
 
     let pythonpath = build_worktree_pythonpath(worktree_path);
 
+    // Filter to runnable pytest files (`test_*.py` / `*_test.py`) so `.md`/`.json` fixtures
+    // or `conftest.py` inside `tests/` never cause pytest collection/exit-code-5 errors.
+    let runnable_py_tests: Vec<String> = gt_test_files
+        .iter()
+        .filter(|rel| {
+            let lower = rel.to_ascii_lowercase();
+            let fname = lower.rsplit('/').next().unwrap_or(&lower);
+            lower.ends_with(".py") && (fname.starts_with("test_") || fname.ends_with("_test.py"))
+        })
+        .cloned()
+        .collect();
+    let effective_gt_targets = if runnable_py_tests.is_empty() {
+        let dirs = collect_parent_dirs(worktree_path, gt_test_files);
+        if dirs.is_empty() {
+            gt_test_files.to_vec()
+        } else {
+            dirs
+        }
+    } else {
+        runnable_py_tests
+    };
+
     // Run hidden ground-truth tests (60s timeout).
     let mut gt_args: Vec<String> = vec![
         "-m".to_string(),
@@ -832,7 +1183,7 @@ async fn run_python_verification(
         "-q".to_string(),
         "--no-header".to_string(),
     ];
-    gt_args.extend(gt_test_files.iter().cloned());
+    gt_args.extend(effective_gt_targets);
 
     let gt_out = run_python_cmd(
         &venv_python,
@@ -1203,7 +1554,7 @@ async fn ensure_python_venv(
         let pytest_out = run_cmd(
             uv_bin,
             worktree_path,
-            &["pip", "install", "--python", &py_str, "pytest"],
+            &["pip", "install", "--python", &py_str, "pytest", "pyyaml"],
             &[],
             ENV_SETUP_TIMEOUT_SECS,
         )
