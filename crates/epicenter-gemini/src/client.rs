@@ -1,3 +1,4 @@
+use crate::decisions::{CreateDecisionRequest, DecisionResponse};
 use crate::error::GeminiError;
 use crate::sse::{InteractionStreamEvent, SseParser};
 use crate::types::{
@@ -92,6 +93,19 @@ impl GeminiClient {
             .send_json_with_retry(Method::POST, &url, request)
             .await?;
         let parsed: InteractionResponse = resp.json().await?;
+        Ok(parsed)
+    }
+
+    /// `POST /v1beta/decisions` (`gemini-decision-1` calibrated closed-set probabilities & rubrics).
+    pub async fn evaluate_decisions(
+        &self,
+        request: &CreateDecisionRequest,
+    ) -> Result<DecisionResponse, GeminiError> {
+        let url = format!("{}/v1beta/decisions", self.config.base_url);
+        let resp = self
+            .send_json_with_retry(Method::POST, &url, request)
+            .await?;
+        let parsed: DecisionResponse = resp.json().await?;
         Ok(parsed)
     }
 

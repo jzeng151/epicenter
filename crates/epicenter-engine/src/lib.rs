@@ -96,6 +96,8 @@ impl TournamentEngine {
                 multimodal_findings: Vec::new(),
                 attachments: req.attachments.clone(),
                 suspect_files: Vec::new(),
+                unit_testable_probability: None,
+                suggested_k: None,
                 created_at: now,
             },
             red_gate: None,

@@ -1,9 +1,11 @@
 pub mod client;
+pub mod decisions;
 pub mod error;
 pub mod sse;
 pub mod types;
 
 pub use client::{GeminiClient, GeminiClientConfig, DEFAULT_BASE_URL};
+pub use decisions::*;
 pub use error::GeminiError;
 pub use sse::{InteractionStreamEvent, SseParser};
 pub use types::*;
@@ -179,5 +181,70 @@ mod tests {
             &ev2[2],
             InteractionStreamEvent::InteractionComplete { interaction } if interaction.id == "int_1"
         ));
+    }
+
+    #[test]
+    fn serializes_decisions_request_and_parses_calibrated_answers() {
+        let req = CreateDecisionRequest::new(vec![ContentPart::text(
+            "Fix crash when header is empty in parser.py",
+        )])
+        .with_question(
+            "is_bug",
+            DecisionQuestion::noul("Is this a software bug report?"),
+        )
+        .with_question(
+            "kind",
+            DecisionQuestion::choice(
+                "Classify the engineering task.",
+                [("bug", "Fixes broken behavior"), ("feature", "Adds capability")],
+            ),
+        )
+        .with_question(
+            "quality",
+            DecisionQuestion::score(
+                "Rate root-cause depth.",
+                ["Symptom bandaid", "Partial guard", "Full root-cause fix"],
+            ),
+        );
+
+        let val: Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(val["model"], "gemini-decision-1");
+        assert!(val.get("generation_config").is_none());
+        assert_eq!(val["questions"]["is_bug"]["type"], "noul");
+        assert_eq!(val["questions"]["kind"]["type"], "choice");
+        assert_eq!(val["questions"]["quality"]["type"], "score");
+
+        let raw_resp = json!({
+            "answers": {
+                "is_bug": { "type": "noul", "noul": 0.94, "confidence": 0.94 },
+                "kind": {
+                    "type": "choice",
+                    "choice": "bug",
+                    "probabilities": { "bug": 0.99, "feature": 0.01 },
+                    "confidence": 0.99
+                },
+                "quality": {
+                    "type": "score",
+                    "score": 1.80,
+                    "legend": { "0": "Symptom bandaid", "1": "Partial guard", "2": "Full root-cause fix" },
+                    "probabilities": { "0": 0.02, "1": 0.16, "2": 0.82 },
+                    "confidence": 0.82
+                }
+            },
+            "usage": {
+                "total_tokens": 215,
+                "total_input_tokens": 215,
+                "total_output_tokens": 0,
+                "input_tokens_by_modality": [{ "modality": "text", "tokens": 215 }]
+            }
+        });
+
+        let parsed: DecisionResponse = serde_json::from_value(raw_resp).unwrap();
+        assert_eq!(parsed.noul_prob("is_bug"), Some(0.94));
+        assert_eq!(parsed.choice("kind"), Some("bug"));
+        let norm = parsed.score_normalized_100("quality", 3).unwrap();
+        assert!((norm - 90.0).abs() < 0.01);
+        assert_eq!(parsed.confidence("quality"), Some(0.82));
+        assert_eq!(parsed.usage.unwrap().total_output_tokens, 0);
     }
 }
