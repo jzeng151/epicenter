@@ -1,5 +1,5 @@
 use crate::db::infer_media_kind;
-use crate::live_judge::run_live_judge_pr;
+use crate::live_judge::{run_live_judge_pr, start_live_judge_pr_job};
 use crate::media::{base64_encode, render_hermes_lyre_58_terminal_png, TempDirGuard};
 use crate::state::{apply_event_to_session, AppState};
 use axum::{
@@ -15,8 +15,9 @@ use axum::{
 use chrono::Utc;
 use epicenter_common::{
     AttachmentMeta, CreatePrRequest, CreatePrResponse, CreateSessionRequest, CreateSessionResponse,
-    ExportBundleResponse, FiveSigmaEval, LiveEvent, LiveJudgePrRequest, LiveJudgePrResponse,
-    MediaKind, ServerStatusResponse, SessionListItem, TaskKind, TournamentSession, TournamentStage,
+    ExportBundleResponse, FiveSigmaEval, LiveEvent, LiveJudgeJobStatusResponse, LiveJudgePrRequest,
+    LiveJudgePrResponse, MediaKind, ServerStatusResponse, SessionListItem, TaskKind,
+    TournamentSession, TournamentStage,
 };
 use epicenter_engine::{EngineRunOptions, TournamentEngine, UploadedAttachmentBytes};
 use futures::stream::{self, Stream};
@@ -130,6 +131,8 @@ pub fn build_router_with_dist(state: AppState, dist_dir: PathBuf) -> Router {
         )
         .route("/api/eval/latest", get(get_latest_eval))
         .route("/api/eval/judge-pr", post(judge_pr_handler))
+        .route("/api/eval/judge-pr/start", post(start_judge_pr_handler))
+        .route("/api/eval/judge-pr/{job_id}", get(get_judge_pr_job_handler))
         .route("/api/eval/{run_id}", get(get_eval_by_id))
         .route("/api/{*rest}", any(api_not_found))
         .fallback_service(static_service)
@@ -796,6 +799,30 @@ pub async fn judge_pr_handler(
         .await
         .map_err(ApiError::bad_gateway)?;
     Ok(Json(resp))
+}
+
+/// `POST /api/eval/judge-pr/start` — starts a non-blocking Live PR Benchmark job and returns immediately.
+pub async fn start_judge_pr_handler(
+    State(state): State<AppState>,
+    Json(req): Json<LiveJudgePrRequest>,
+) -> Result<Json<LiveJudgeJobStatusResponse>, ApiError> {
+    if req.pr_url.trim().is_empty() {
+        return Err(ApiError::bad_request("pr_url is required"));
+    }
+    let status = start_live_judge_pr_job(&state, &req)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(Json(status))
+}
+
+/// `GET /api/eval/judge-pr/{job_id}` — returns live per-arm progress or the completed `FiveSigmaEval`.
+pub async fn get_judge_pr_job_handler(
+    State(state): State<AppState>,
+    Path(job_id): Path<Uuid>,
+) -> Result<Json<LiveJudgeJobStatusResponse>, ApiError> {
+    let status = state
+        .get_judge_job(job_id)
+        .ok_or_else(|| ApiError::not_found(format!("live judge job '{job_id}' not found")))?;
+    Ok(Json(status))
 }
 
 /// `GET /api/eval/{run_id}`

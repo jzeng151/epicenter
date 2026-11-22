@@ -69,6 +69,7 @@ impl GeminiClient {
         }
         let http = reqwest::Client::builder()
             .timeout(config.request_timeout)
+            .pool_idle_timeout(Duration::from_secs(30))
             .build()?;
         Ok(Self {
             http,
@@ -514,12 +515,12 @@ impl GeminiClient {
                 })
             }
             Err(err) => {
-                // Retry fast connect errors up to `max_retries`, but cap full request timeouts
-                // to a single retry so a slow model call can never hang a stage for 10+ minutes.
+                // Retry fast connect/transport errors up to `max_retries`, while capping full
+                // request timeouts to a single retry so slow calls never stall a stage.
                 let retry_allowed = if err.is_timeout() {
                     attempt == 0 && self.config.max_retries > 0
                 } else {
-                    err.is_connect() && attempt < self.config.max_retries
+                    (err.is_connect() || err.is_request()) && attempt < self.config.max_retries
                 };
                 if retry_allowed {
                     let backoff = self.backoff_duration(attempt);

@@ -3,11 +3,33 @@ use std::collections::HashSet;
 
 use epicenter_common::{
     ArmAggregateMetrics, ArmOutcome, CalibrationFinding, EvalArm, EvalIssueCase, EvalScorecard,
-    EvalSplit, FiveSigmaEval, LiveJudgePrRequest, LiveJudgePrResponse,
+    EvalSplit, FiveSigmaEval, LiveJudgeJobState, LiveJudgeJobStatusResponse, LiveJudgePrRequest,
 };
 use gloo_net::http::Request;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+
+async fn sleep_ms(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(win) = web_sys::window() {
+            let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+fn extract_api_error(status: u16, body: &str) -> String {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Some(msg) = val.get("error").and_then(|v| v.as_str()) {
+            return msg.to_string();
+        }
+    }
+    if body.trim().is_empty() {
+        format!("Request failed (HTTP {status})")
+    } else {
+        format!("HTTP {status}: {body}")
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvalFilter {
@@ -226,6 +248,7 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
     let pr_url_input = RwSignal::new(String::new());
     let judging = RwSignal::new(false);
     let judge_error = RwSignal::new(Option::<String>::None);
+    let judge_progress = RwSignal::new(Option::<LiveJudgeJobStatusResponse>::None);
     let live_judge_eval = RwSignal::new(Option::<FiveSigmaEval>::None);
 
     // Load latest live eval on mount
@@ -243,12 +266,15 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
         }
         judging.set(true);
         judge_error.set(None);
+        judge_progress.set(None);
+        live_judge_eval.set(None);
+
         spawn_local(async move {
             let result = async {
                 let payload = LiveJudgePrRequest { pr_url: url };
                 let body = serde_json::to_string(&payload)
                     .map_err(|e| format!("Failed serializing request: {e}"))?;
-                let req = Request::post(&crate::api_client::api_url("/api/eval/judge-pr"))
+                let req = Request::post(&crate::api_client::api_url("/api/eval/judge-pr/start"))
                     .header("Content-Type", "application/json")
                     .body(body)
                     .map_err(|e| format!("Failed building request: {e}"))?;
@@ -260,18 +286,68 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                 let text = resp
                     .text()
                     .await
-                    .map_err(|e| format!("Failed reading PR evaluation response: {e}"))?;
+                    .map_err(|e| format!("Failed reading start response: {e}"))?;
                 if !(200..300).contains(&status) {
-                    return Err(format!("PR evaluation returned HTTP {status}: {text}"));
+                    return Err(extract_api_error(status, &text));
                 }
-                let parsed: LiveJudgePrResponse = serde_json::from_str(&text)
-                    .map_err(|e| format!("Invalid PR evaluation JSON: {e}"))?;
-                Ok::<FiveSigmaEval, String>(parsed.eval)
+                let initial: LiveJudgeJobStatusResponse = serde_json::from_str(&text)
+                    .map_err(|e| format!("Invalid job status JSON: {e}"))?;
+                let job_id = initial.job_id;
+                judge_progress.set(Some(initial));
+
+                let mut consecutive_poll_errors = 0u8;
+                loop {
+                    sleep_ms(1200).await;
+                    let poll_url =
+                        crate::api_client::api_url(&format!("/api/eval/judge-pr/{job_id}"));
+                    let poll_res = Request::get(&poll_url).send().await;
+                    let resp = match poll_res {
+                        Ok(r) => r,
+                        Err(e) => {
+                            consecutive_poll_errors += 1;
+                            if consecutive_poll_errors >= 4 {
+                                return Err(format!("Lost connection while polling PR run: {e}"));
+                            }
+                            continue;
+                        }
+                    };
+                    let st = resp.status();
+                    let body_txt = resp.text().await.unwrap_or_default();
+                    if !(200..300).contains(&st) {
+                        return Err(extract_api_error(st, &body_txt));
+                    }
+                    consecutive_poll_errors = 0;
+
+                    let job: LiveJudgeJobStatusResponse = serde_json::from_str(&body_txt)
+                        .map_err(|e| format!("Invalid poll status JSON: {e}"))?;
+                    let state = job.state;
+                    let maybe_eval = job.eval.clone();
+                    let maybe_err = job.error.clone();
+                    judge_progress.set(Some(job));
+
+                    match state {
+                        LiveJudgeJobState::Running => continue,
+                        LiveJudgeJobState::Completed => {
+                            if let Some(done_eval) = maybe_eval {
+                                return Ok::<FiveSigmaEval, String>(done_eval);
+                            }
+                            return Err("Evaluation completed without a result payload.".to_string());
+                        }
+                        LiveJudgeJobState::Failed => {
+                            return Err(maybe_err
+                                .unwrap_or_else(|| "Live PR evaluation failed.".to_string()));
+                        }
+                    }
+                }
             }
             .await;
 
             match result {
-                Ok(live_eval) => live_judge_eval.set(Some(live_eval)),
+                Ok(live_eval) => {
+                    eval_data.set(Some(live_eval.clone()));
+                    active_filter.set(EvalFilter::All);
+                    live_judge_eval.set(Some(live_eval));
+                }
                 Err(err) => judge_error.set(Some(err)),
             }
             judging.set(false);
@@ -323,6 +399,68 @@ pub fn FiveSigmaEvalView() -> impl IntoView {
                 {move || judge_error.get().map(|err| view! {
                     <div class="epi-err-banner" role="alert">{err}</div>
                 })}
+
+                {move || {
+                    if !judging.get() {
+                        return None;
+                    }
+                    let job = judge_progress.get()?;
+                    let header_title = job
+                        .pr_title
+                        .clone()
+                        .unwrap_or_else(|| job.pr_url.clone());
+                    let total_dur = format_duration_ms(job.elapsed_ms);
+                    let rows = job
+                        .arms
+                        .into_iter()
+                        .map(|arm_prog| {
+                            let dot = arm_color(arm_prog.arm);
+                            let label = arm_short_label(arm_prog.arm);
+                            let (badge_cls, badge_txt) = match arm_prog.state {
+                                LiveJudgeJobState::Running => ("epi-badge epi-badge-amber", "Running"),
+                                LiveJudgeJobState::Completed => ("epi-badge epi-badge-pass", "Done"),
+                                LiveJudgeJobState::Failed => ("epi-badge epi-badge-fail", "Failed"),
+                            };
+                            let arm_dur = format_duration_ms(arm_prog.elapsed_ms);
+                            view! {
+                                <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; border-radius:8px; background:rgba(15,23,42,0.75); border:1px solid rgba(51,65,85,0.6);">
+                                    <div style="display:flex; align-items:center; gap:8px; min-width:140px;">
+                                        <span class="epi-arm-dot" style=format!("background:{dot};") aria-hidden="true"></span>
+                                        <strong style="font-size:12.5px; color:#f8fafc;">{label}</strong>
+                                        <span class=badge_cls>{badge_txt}</span>
+                                    </div>
+                                    <div style="flex:1; min-width:200px; font-size:12px; color:#cbd5e1;">
+                                        {arm_prog.detail}
+                                    </div>
+                                    <span class="mono" style="font-size:11.5px; color:#94a3b8;">
+                                        {arm_dur}
+                                    </span>
+                                </div>
+                            }
+                        })
+                        .collect_view();
+
+                    Some(view! {
+                        <div class="epi-eval-card" role="status" aria-live="polite" style="background:#080d18; border-color:rgba(56,189,248,0.38); padding:14px; display:flex; flex-direction:column; gap:10px;">
+                            <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px;">
+                                <div>
+                                    <div style="font-size:13px; font-weight:700; color:#7dd3fc;">
+                                        {format!("Running 3-Way Comparison in Parallel · {header_title}")}
+                                    </div>
+                                    <div style="font-size:11.5px; color:#94a3b8;">
+                                        "All three approaches are running concurrently against the pre-fix commit."
+                                    </div>
+                                </div>
+                                <span class="mono" style="font-size:12px; color:#e2e8f0; font-weight:600;">
+                                    {format!("Elapsed: {total_dur}")}
+                                </span>
+                            </div>
+                            <div style="display:flex; flex-direction:column; gap:6px;">
+                                {rows}
+                            </div>
+                        </div>
+                    })
+                }}
 
                 {move || live_judge_eval.get().map(|live_eval| {
                     let live_clone_for_promote = live_eval.clone();

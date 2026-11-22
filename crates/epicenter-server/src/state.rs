@@ -1,7 +1,8 @@
 use crate::db::DbStore;
 use crate::github::GitHubClient;
 use epicenter_common::{
-    CandidateResult, CandidateStatus, LiveEvent, TournamentSession, TournamentStage,
+    CandidateResult, CandidateStatus, LiveEvent, LiveJudgeJobStatusResponse, TournamentSession,
+    TournamentStage,
 };
 use epicenter_engine::TournamentEngine;
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ pub struct AppState {
     pub engine: Arc<TournamentEngine>,
     pub github: GitHubClient,
     channels: Arc<RwLock<HashMap<Uuid, broadcast::Sender<LiveEvent>>>>,
+    judge_jobs: Arc<RwLock<HashMap<Uuid, LiveJudgeJobStatusResponse>>>,
 }
 
 impl AppState {
@@ -27,11 +29,39 @@ impl AppState {
             engine: Arc::new(engine),
             github,
             channels: Arc::new(RwLock::new(HashMap::new())),
+            judge_jobs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub fn from_env(db: DbStore) -> Self {
         Self::new(db, TournamentEngine::from_env(), GitHubClient::from_env())
+    }
+
+    /// Inserts or replaces a live PR benchmark job snapshot.
+    pub fn set_judge_job(&self, job: LiveJudgeJobStatusResponse) {
+        if let Ok(mut guard) = self.judge_jobs.write() {
+            guard.insert(job.job_id, job);
+        }
+    }
+
+    /// Mutates an in-flight live PR benchmark job snapshot in place.
+    pub fn update_judge_job<F>(&self, job_id: Uuid, f: F)
+    where
+        F: FnOnce(&mut LiveJudgeJobStatusResponse),
+    {
+        if let Ok(mut guard) = self.judge_jobs.write() {
+            if let Some(job) = guard.get_mut(&job_id) {
+                f(job);
+            }
+        }
+    }
+
+    /// Reads the latest snapshot for a live PR benchmark job.
+    pub fn get_judge_job(&self, job_id: Uuid) -> Option<LiveJudgeJobStatusResponse> {
+        self.judge_jobs
+            .read()
+            .ok()
+            .and_then(|g| g.get(&job_id).cloned())
     }
 
     /// Returns the existing broadcast sender for `session_id`, or creates a new one.
